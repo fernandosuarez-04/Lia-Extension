@@ -5,7 +5,9 @@ import { useAuth } from '../contexts/AuthContext';
 import Auth from '../components/Auth';
 import { supabase } from '../lib/supabase';
 import { SettingsModal } from './SettingsModal';
-import { FeedbackModal } from './FeedbackModal';
+import { FeedbackModal as _FeedbackModal } from './FeedbackModal';
+import { MapViewer } from '../components/MapViewer';
+import { MeetingPanel } from '../components/MeetingPanel';
 
 interface GroundingSource {
   uri: string;
@@ -15,6 +17,7 @@ interface GroundingSource {
 interface MapPlace {
   placeId?: string;
   name: string;
+  location?: { lat: number; lng: number };
   address?: string;
   rating?: number;
   uri?: string;
@@ -82,7 +85,7 @@ function App() {
   // Static Model List with Rich Metadata for UI
   const MODEL_OPTIONS = [
       { 
-        id: 'gemini-3.0-flash-preview', 
+        id: 'gemini-3-flash-preview', 
         name: 'Gemini 3.0 Flash', 
         desc: 'Equilibrio perfecto entre velocidad y calidad.',
         icon: <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><polygon points="13 2 3 14 12 14 11 22 21 10 12 10 13 2"></polygon></svg>,
@@ -169,7 +172,6 @@ function App() {
   const [targetAI, setTargetAI] = useState<'chatgpt' | 'claude' | 'gemini' | null>(null);
 
   // Maps Mode States
-  const [isMapsMode, setIsMapsMode] = useState(false);
   const [userLocation, setUserLocation] = useState<{ latitude: number; longitude: number } | null>(null);
 
   // Settings Menu States
@@ -194,15 +196,19 @@ function App() {
   const [expandedFolders, setExpandedFolders] = useState<Set<string>>(new Set());
   const [isFolderModalOpen, setIsFolderModalOpen] = useState(false);
   const [newFolderName, setNewFolderName] = useState('');
+  const [movingChatId, setMovingChatId] = useState<string | null>(null);
 
   // Settings & Feedback Modals
   const [isSettingsModalOpen, setIsSettingsModalOpen] = useState(false);
-  const [isFeedbackModalOpen, setIsFeedbackModalOpen] = useState(false);
-  const [feedbackType, setFeedbackType] = useState<'positive' | 'negative' | null>(null);
-  const [feedbackMessageContent, setFeedbackMessageContent] = useState('');
+  const [_isFeedbackModalOpen, setIsFeedbackModalOpen] = useState(false);
+  const [_feedbackType, setFeedbackType] = useState<'positive' | 'negative' | null>(null);
+  const [_feedbackMessageContent, setFeedbackMessageContent] = useState('');
 
   // Personalization Settings
   const [_userSettings, setUserSettings] = useState<UserSettings | null>(null);
+
+  // Meeting Mode
+  const [isMeetingMode, setIsMeetingMode] = useState(false);
 
   // Debounce ref for saving
   const saveTimeoutRef = useRef<NodeJS.Timeout | null>(null);
@@ -821,8 +827,9 @@ function App() {
     }
   };
 
-  const handleSendMessage = async (text: string = inputValue) => {
+  const handleSendMessage = async (text: string = inputValue, overrideImages: string[] | null = null, skipUserLog: boolean = false) => {
     // Build messages - separate display from API
+    const imagesToUse = overrideImages || selectedImages;
     let displayMessage = text.trim(); // What user sees in chat
     let apiMessage = text.trim(); // What gets sent to API
     
@@ -883,17 +890,23 @@ function App() {
       return;
     }
 
-    const userMessage: Message = {
-      id: Date.now().toString(),
-      role: 'user',
-      text: displayMessage,
-      timestamp: Date.now(),
-      images: selectedImages.length > 0 ? [...selectedImages] : undefined
-    };
+    if (!skipUserLog) {
+        const userMessage: Message = {
+        id: Date.now().toString(),
+        role: 'user',
+        text: displayMessage,
+        timestamp: Date.now(),
+        images: imagesToUse.length > 0 ? [...imagesToUse] : undefined
+        };
 
-    setMessages((prev) => [...prev, userMessage]);
-    setInputValue('');
-    setSelectedImages([]);
+        setMessages((prev) => [...prev, userMessage]);
+        setInputValue('');
+        setSelectedImages([]);
+    } else {
+        // If skipping user log (regeneration), ensure we don't clear the input if it's being typed
+        // But usually regeneration happens when input is empty or unrelated.
+    }
+    
     setIsLoading(true);
 
     const aiMessageId = (Date.now() + 1).toString();
@@ -992,37 +1005,60 @@ function App() {
         return;
       }
 
-      // If in Maps mode
-      if (isMapsMode && userLocation) {
-        try {
-          const { runMapsQuery } = await import('../services/gemini');
-          const result = await runMapsQuery(apiMessage, userLocation);
+      // Check for Maps/Location Intent automatically
+      const { runMapsQuery, needsMapsGrounding } = await import('../services/gemini');
+      
+      if (needsMapsGrounding(apiMessage) && !isImageGenMode && !isDeepResearch && !isMeetingMode) {
+         try {
+             // 1. Try to get user location on the fly
+             let locationToUse = userLocation;
 
-          setMessages((prev) =>
+             if (!locationToUse) {
+                 try {
+                     const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
+                     if (tab?.id) {
+                         const response = await chrome.tabs.sendMessage(tab.id, { action: 'getGeolocation' });
+                         if (response?.success && response.location) {
+                             locationToUse = response.location;
+                             setUserLocation(locationToUse);
+                         }
+                     }
+                 } catch (e) {
+                     console.warn("Could not auto-fetch location:", e);
+                 }
+             }
+
+             // 2. Determine location (User's or Default CDMX)
+             const finalLocation = locationToUse || { latitude: 19.4326, longitude: -99.1332 };
+
+             const result = await runMapsQuery(apiMessage, finalLocation);
+
+             setMessages((prev) =>
+             prev.map(msg =>
+               msg.id === aiMessageId
+                 ? {
+                     ...msg,
+                     text: result.text,
+                     places: result.places
+                   }
+                 : msg
+             )
+           );
+         } catch (error) {
+           console.error('Maps query error:', error);
+           // Fallback to normal chat if fails
+           const errorMessage = error instanceof Error ? error.message : 'Error desconocido';
+           setMessages((prev) =>
             prev.map(msg =>
-              msg.id === aiMessageId
-                ? {
-                    ...msg,
-                    text: result.text,
-                    places: result.places
-                  }
+                msg.id === aiMessageId
+                ? { ...msg, text: `Error intentando buscar lugares: ${errorMessage}` }
                 : msg
             )
-          );
-        } catch (error) {
-          console.error('Maps query error:', error);
-          const errorMessage = error instanceof Error ? error.message : 'Error desconocido';
-          setMessages((prev) =>
-            prev.map(msg =>
-              msg.id === aiMessageId
-                ? { ...msg, text: `Error buscando lugares: ${errorMessage}` }
-                : msg
-            )
-          );
-        } finally {
-          setIsLoading(false);
-        }
-        return;
+            );
+         } finally {
+            setIsLoading(false);
+         }
+         return;
       }
 
       // If in Deep Research mode
@@ -1351,7 +1387,7 @@ function App() {
             </div>
             
             {/* Active Mode Indicator in Header */}
-            {(isDeepResearch || isImageGenMode || isPromptOptimizerMode || isMapsMode) && (
+            {(isDeepResearch || isImageGenMode || isPromptOptimizerMode || isMeetingMode) && (
               <div style={{
                 display: 'flex',
                 alignItems: 'center',
@@ -1361,12 +1397,14 @@ function App() {
                 background: isDeepResearch ? 'rgba(0, 212, 179, 0.15)' :
                            isImageGenMode ? 'rgba(168, 85, 247, 0.15)' :
                            isPromptOptimizerMode ? 'rgba(251, 191, 36, 0.15)' :
+                           isMeetingMode ? 'rgba(6, 182, 212, 0.15)' :
                            'rgba(59, 130, 246, 0.15)',
                 borderRadius: '12px',
                 fontSize: '11px',
                 color: isDeepResearch ? '#00d4b3' :
                        isImageGenMode ? '#a855f7' :
                        isPromptOptimizerMode ? '#fbbf24' :
+                       isMeetingMode ? '#06b6d4' :
                        '#3b82f6',
                 fontWeight: 500
               }}>
@@ -1389,22 +1427,22 @@ function App() {
                     <path d="M16.5 3.5a2.121 2.121 0 0 1 3 3L7 19l-4 1 1-4L16.5 3.5z"></path>
                   </svg>
                 )}
-                {isMapsMode && (
+                {isMeetingMode && (
                   <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
-                    <path d="M21 10c0 7-9 13-9 13s-9-6-9-13a9 9 0 0 1 18 0z"></path>
-                    <circle cx="12" cy="10" r="3"></circle>
+                    <path d="M15 10l4.553-2.276A1 1 0 0121 8.618v6.764a1 1 0 01-1.447.894L15 14M5 18h8a2 2 0 002-2V8a2 2 0 00-2-2H5a2 2 0 00-2 2v8a2 2 0 002 2z" />
                   </svg>
                 )}
                 {isDeepResearch ? 'Deep Research' :
                  isImageGenMode ? 'Generación de Imagen' :
                  isPromptOptimizerMode ? `Mejorar para ${targetAI === 'chatgpt' ? 'ChatGPT' : targetAI === 'claude' ? 'Claude' : 'Gemini'}` :
-                 'Buscar Lugares'}
+                 isMeetingMode ? 'Agente de Reuniones' :
+                 ''}
                 <button
                   onClick={() => {
                     setIsDeepResearch(false);
                     setIsImageGenMode(false);
                     setIsPromptOptimizerMode(false);
-                    setIsMapsMode(false);
+                    setIsMeetingMode(false);
                     setTargetAI(null);
                   }}
                   style={{
@@ -1552,7 +1590,18 @@ function App() {
         </div>
       </header>
 
-      {/* Main Chat Area */}
+      {/* Meeting Panel - Shows when meeting mode is active */}
+      {isMeetingMode && (
+        <div style={{ flex: 1, overflow: 'hidden' }}>
+          <MeetingPanel
+            userId={user?.id || ''}
+            onClose={() => setIsMeetingMode(false)}
+          />
+        </div>
+      )}
+
+      {/* Main Chat Area - Hidden when meeting mode is active */}
+      {!isMeetingMode && (
       <main style={{
         flex: 1,
         overflowY: 'auto',
@@ -1608,8 +1657,7 @@ function App() {
           </div>
         )}
 
-        {/* Messages - filter out empty model messages to avoid duplicate loaders */}
-        {messages.filter(msg => !(msg.role === 'model' && !msg.text)).map((msg) => (
+        {messages.filter(msg => !(msg.role === 'model' && !msg.text)).map((msg, index) => (
           <div
             key={msg.id}
             style={{
@@ -1698,7 +1746,13 @@ function App() {
                   </div>
                 )}
                 {msg.role === 'model' ? (
-                  <ReactMarkdown>{msg.text}</ReactMarkdown>
+                  isLoading && index === messages.length - 1 ? (
+                    <div className="markdown-content typing-cursor">
+                         <ReactMarkdown>{msg.text}</ReactMarkdown>
+                    </div>
+                  ) : (
+                    <ReactMarkdown>{msg.text}</ReactMarkdown>
+                  )
                 ) : (
                   msg.text
                 )}
@@ -1713,6 +1767,7 @@ function App() {
                   border: '1px solid var(--border-modal)',
                   overflow: 'hidden'
                 }}>
+                  {/* ... (Sources Header and List existing code) ... */}
                   {/* Header with Google branding */}
                   <div style={{
                     padding: '10px 14px',
@@ -1756,127 +1811,138 @@ function App() {
                   {/* Sources List */}
                   <div style={{ padding: '8px' }}>
                     {msg.sources.slice(0, 6).map((source, i) => {
-                      let domain = '';
-                      try {
-                        domain = new URL(source.uri).hostname.replace('www.', '');
-                      } catch {
-                        domain = source.uri;
-                      }
-
-                      return (
-                        <a
-                          key={i}
-                          href={source.uri}
-                          target="_blank"
-                          rel="noopener noreferrer"
-                          style={{
-                            display: 'flex',
-                            alignItems: 'center',
-                            gap: '10px',
-                            padding: '10px 12px',
-                            borderRadius: '8px',
-                            textDecoration: 'none',
-                            transition: 'background 0.2s',
-                            marginBottom: i < Math.min(msg.sources!.length, 6) - 1 ? '4px' : '0'
-                          }}
-                          onMouseOver={(e) => {
-                            e.currentTarget.style.background = 'var(--bg-dark-secondary)';
-                          }}
-                          onMouseOut={(e) => {
-                            e.currentTarget.style.background = 'transparent';
-                          }}
-                        >
-                          {/* Favicon */}
-                          <div style={{
-                            width: '32px',
-                            height: '32px',
-                            borderRadius: '8px',
-                            background: 'var(--bg-dark-secondary)',
-                            display: 'flex',
-                            alignItems: 'center',
-                            justifyContent: 'center',
-                            flexShrink: 0,
-                            border: '1px solid var(--border-modal)'
-                          }}>
-                            <img
-                              src={`https://www.google.com/s2/favicons?domain=${source.uri}&sz=32`}
-                              alt=""
-                              style={{ width: '18px', height: '18px', borderRadius: '4px' }}
-                              onError={(e) => {
-                                const target = e.currentTarget;
-                                target.style.display = 'none';
-                              }}
-                            />
-                          </div>
-
-                          {/* Content */}
-                          <div style={{ flex: 1, minWidth: 0 }}>
+                       // ... existing detailed source mapping ...
+                       let domain = '';
+                       try {
+                         domain = new URL(source.uri).hostname.replace('www.', '');
+                       } catch {
+                         domain = source.uri;
+                       }
+ 
+                       return (
+                         <a
+                           key={i}
+                           href={source.uri}
+                           target="_blank"
+                           rel="noopener noreferrer"
+                           style={{
+                             display: 'flex',
+                             alignItems: 'center',
+                             gap: '10px',
+                             padding: '10px 12px',
+                             borderRadius: '8px',
+                             textDecoration: 'none',
+                             transition: 'background 0.2s',
+                             marginBottom: i < Math.min(msg.sources!.length, 6) - 1 ? '4px' : '0'
+                           }}
+                           onMouseOver={(e) => {
+                             e.currentTarget.style.background = 'var(--bg-dark-secondary)';
+                           }}
+                           onMouseOut={(e) => {
+                             e.currentTarget.style.background = 'transparent';
+                           }}
+                         >
                             <div style={{
-                              fontSize: '13px',
-                              fontWeight: 500,
-                              color: 'var(--color-text-primary)',
-                              overflow: 'hidden',
-                              textOverflow: 'ellipsis',
-                              whiteSpace: 'nowrap',
-                              marginBottom: '2px'
-                            }}>
-                              {source.title || domain}
-                            </div>
-                            <div style={{
-                              fontSize: '11px',
-                              color: 'var(--color-gray-medium)',
-                              display: 'flex',
-                              alignItems: 'center',
-                              gap: '4px'
-                            }}>
-                              <span style={{
-                                display: 'inline-flex',
-                                alignItems: 'center',
-                                justifyContent: 'center',
-                                width: '16px',
-                                height: '16px',
-                                borderRadius: '4px',
-                                background: 'rgba(66, 133, 244, 0.15)',
-                                color: '#4285f4',
-                                fontSize: '10px',
-                                fontWeight: 600
-                              }}>
-                                {i + 1}
-                              </span>
-                              {domain}
-                            </div>
-                          </div>
-
-                          {/* Arrow */}
-                          <svg
-                            width="16"
-                            height="16"
-                            viewBox="0 0 24 24"
-                            fill="none"
-                            stroke="var(--color-gray-medium)"
-                            strokeWidth="2"
-                            style={{ flexShrink: 0, opacity: 0.5 }}
-                          >
-                            <line x1="7" y1="17" x2="17" y2="7"></line>
-                            <polyline points="7 7 17 7 17 17"></polyline>
-                          </svg>
-                        </a>
-                      );
+                             width: '32px',
+                             height: '32px',
+                             borderRadius: '8px',
+                             background: 'var(--bg-dark-secondary)',
+                             display: 'flex',
+                             alignItems: 'center',
+                             justifyContent: 'center',
+                             flexShrink: 0,
+                             border: '1px solid var(--border-modal)'
+                           }}>
+                             <img
+                               src={`https://www.google.com/s2/favicons?domain=${source.uri}&sz=32`}
+                               alt=""
+                               style={{ width: '18px', height: '18px', borderRadius: '4px' }}
+                               onError={(e) => {
+                                 const target = e.currentTarget;
+                                 target.style.display = 'none';
+                               }}
+                             />
+                           </div>
+                           <div style={{ flex: 1, minWidth: 0 }}>
+                             <div style={{
+                               fontSize: '13px',
+                               fontWeight: 500,
+                               color: 'var(--color-text-primary)',
+                               overflow: 'hidden',
+                               textOverflow: 'ellipsis',
+                               whiteSpace: 'nowrap',
+                               marginBottom: '2px'
+                             }}>
+                               {source.title || domain}
+                             </div>
+                             <div style={{
+                               fontSize: '11px',
+                               color: 'var(--color-gray-medium)',
+                               display: 'flex',
+                               alignItems: 'center',
+                               gap: '4px'
+                             }}>
+                                <span style={{
+                                 display: 'inline-flex',
+                                 alignItems: 'center',
+                                 justifyContent: 'center',
+                                 width: '16px',
+                                 height: '16px',
+                                 borderRadius: '4px',
+                                 background: 'rgba(66, 133, 244, 0.15)',
+                                 color: '#4285f4',
+                                 fontSize: '10px',
+                                 fontWeight: 600
+                               }}>
+                                 {i + 1}
+                               </span>
+                               {domain}
+                             </div>
+                           </div>
+                           <svg
+                             width="16"
+                             height="16"
+                             viewBox="0 0 24 24"
+                             fill="none"
+                             stroke="var(--color-gray-medium)"
+                             strokeWidth="2"
+                             style={{ flexShrink: 0, opacity: 0.5 }}
+                           >
+                             <line x1="7" y1="17" x2="17" y2="7"></line>
+                             <polyline points="7 7 17 7 17 17"></polyline>
+                           </svg>
+                         </a>
+                       );
                     })}
-
-                    {/* Show more if needed */}
-                    {msg.sources.length > 6 && (
-                      <div style={{
-                        textAlign: 'center',
-                        padding: '8px',
-                        fontSize: '12px',
-                        color: 'var(--color-gray-medium)'
-                      }}>
-                        +{msg.sources.length - 6} fuentes más
-                      </div>
-                    )}
-                  </div>
+                     {msg.sources.length > 6 && (
+                       <div style={{
+                         textAlign: 'center',
+                         padding: '8px',
+                         fontSize: '12px',
+                         color: 'var(--color-gray-medium)'
+                       }}>
+                         +{msg.sources.length - 6} fuentes más
+                       </div>
+                     )}
+                   </div>
                 </div>
+              )}
+
+              {/* Maps Viewer */}
+              {msg.role === 'model' && msg.places && msg.places.length > 0 && (
+                 <div style={{ marginTop: '12px' }}>
+                    <MapViewer 
+                        center={(() => {
+                            // First, try connection with first result
+                            if (msg.places[0].location) return msg.places[0].location;
+                            // Fallback to user location if available in state scope
+                            if (userLocation) return { lat: userLocation.latitude, lng: userLocation.longitude };
+                            // Default to CDMX as fallback
+                            return { lat: 19.4326, lng: -99.1332 };
+                        })()}
+                        places={msg.places.filter(p => p.location) as any}
+                    />
+                 </div>
               )}
 
               {/* Actions */}
@@ -1901,7 +1967,15 @@ function App() {
                   </button>
                   {/* Like Button */}
                   <button
-                    onClick={() => addReaction(msg.id, 'like')}
+                    onClick={() => {
+                        const isLiked = msg.reactions?.includes('like');
+                        addReaction(msg.id, 'like');
+                        if (!isLiked) {
+                            setFeedbackType('positive');
+                            setFeedbackMessageContent(msg.text);
+                            setIsFeedbackModalOpen(true);
+                        }
+                    }}
                     style={{
                       background: 'none',
                       border: 'none',
@@ -1919,7 +1993,15 @@ function App() {
 
                   {/* Dislike Button */}
                   <button
-                    onClick={() => addReaction(msg.id, 'dislike')}
+                    onClick={() => {
+                        const isDisliked = msg.reactions?.includes('dislike');
+                        addReaction(msg.id, 'dislike');
+                        if (!isDisliked) {
+                            setFeedbackType('negative');
+                            setFeedbackMessageContent(msg.text);
+                            setIsFeedbackModalOpen(true);
+                        }
+                    }}
                     style={{
                       background: 'none',
                       border: 'none',
@@ -1938,8 +2020,18 @@ function App() {
                   {/* Regenerate Button */}
                   <button
                     onClick={() => {
-                      /* Todo: Implement regeneration logic */
-                      console.log('Regenerate requested');
+                      const msgIndex = messages.findIndex(m => m.id === msg.id);
+                      if (msgIndex > 0) {
+                          const previousMsg = messages[msgIndex - 1];
+                          if (previousMsg && previousMsg.role === 'user') {
+                              // 1. Remove ONLY the current AI message we want to regenerate
+                              setMessages(prev => prev.filter(m => m.id !== msg.id));
+                              
+                              // 2. Trigger send with previous content, skipping the user log
+                              // Pass the previous message's images if any
+                              handleSendMessage(previousMsg.text, previousMsg.images || null, true);
+                          }
+                      }
                     }}
                     style={{
                       background: 'none',
@@ -1963,7 +2055,7 @@ function App() {
           </div>
         ))}
 
-        {isLoading && (
+        {isLoading && !(messages[messages.length - 1]?.role === 'model' && messages[messages.length - 1]?.text) && (
           <div style={{ display: 'flex', gap: '8px', alignItems: 'center' }}>
             <img
               src={liaAvatar}
@@ -1987,8 +2079,10 @@ function App() {
 
         <div ref={messagesEndRef} />
       </main>
+      )}
 
-      {/* Input Area */}
+      {/* Input Area - Hidden when meeting mode is active */}
+      {!isMeetingMode && (
       <footer style={{
         padding: '12px 16px',
         borderTop: '1px solid var(--bg-dark-secondary)',
@@ -2214,7 +2308,6 @@ function App() {
                     setIsDeepResearch(!isDeepResearch);
                     setIsImageGenMode(false);
                     setIsPromptOptimizerMode(false);
-                    setIsMapsMode(false);
                     setIsPlusMenuOpen(false);
                   }}
                   style={{
@@ -2315,7 +2408,6 @@ function App() {
                     setIsImageGenMode(!isImageGenMode);
                     setIsDeepResearch(false);
                     setIsPromptOptimizerMode(false);
-                    setIsMapsMode(false);
                     setIsPlusMenuOpen(false);
                   }}
                   style={{
@@ -2361,7 +2453,7 @@ function App() {
                     }
                     setIsDeepResearch(false);
                     setIsImageGenMode(false);
-                    setIsMapsMode(false);
+                    // setIsMapsMode has been removed
                     setIsPlusMenuOpen(false);
                   }}
                   style={{
@@ -2394,75 +2486,7 @@ function App() {
                   )}
                 </button>
 
-                {/* Maps Mode */}
-                <button
-                  onClick={async () => {
-                    if (!isMapsMode) {
-                      // Get user location through content script (side panel can't access geolocation directly)
-                      try {
-                        const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
-                        if (!tab?.id) {
-                          alert('No se pudo acceder a la pestaña actual. Abre una página web primero.');
-                          return;
-                        }
 
-                        // Request geolocation through content script
-                        const response = await chrome.tabs.sendMessage(tab.id, { action: 'getGeolocation' });
-
-                        if (response?.success && response.location) {
-                          setUserLocation({
-                            latitude: response.location.latitude,
-                            longitude: response.location.longitude
-                          });
-                          setIsMapsMode(true);
-                          console.log('✓ Ubicación obtenida:', response.location);
-                        } else {
-                          const errorMsg = response?.error || 'No se pudo obtener la ubicación';
-                          console.error('Error de geolocalización:', errorMsg);
-                          alert(`${errorMsg}.\n\nAsegúrate de:\n1. Estar en una página web (no chrome://)\n2. Permitir el acceso a ubicación cuando el navegador lo solicite`);
-                        }
-                      } catch (err) {
-                        console.error('Error getting location:', err);
-                        alert('No se pudo conectar con la página.\n\nPrueba:\n1. Recargar la página actual\n2. Asegurarte de no estar en una página de Chrome (chrome://)');
-                      }
-                    } else {
-                      setIsMapsMode(false);
-                      setUserLocation(null);
-                    }
-                    setIsDeepResearch(false);
-                    setIsImageGenMode(false);
-                    setIsPromptOptimizerMode(false);
-                    setIsPlusMenuOpen(false);
-                  }}
-                  style={{
-                    width: '100%',
-                    display: 'flex',
-                    alignItems: 'center',
-                    gap: '10px',
-                    padding: '10px 12px',
-                    background: isMapsMode ? 'rgba(59, 130, 246, 0.15)' : 'transparent',
-                    border: 'none',
-                    borderRadius: '8px',
-                    color: isMapsMode ? '#3b82f6' : 'var(--color-white)',
-                    cursor: 'pointer',
-                    fontSize: '13px',
-                    textAlign: 'left'
-                  }}
-                >
-                  <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
-                    <path d="M21 10c0 7-9 13-9 13s-9-6-9-13a9 9 0 0 1 18 0z"></path>
-                    <circle cx="12" cy="10" r="3"></circle>
-                  </svg>
-                  <div>
-                    <div style={{ fontWeight: 500 }}>Buscar Lugares</div>
-                    <div style={{ fontSize: '11px', color: 'var(--color-gray-medium)' }}>Restaurantes, tiendas, etc.</div>
-                  </div>
-                  {isMapsMode && (
-                    <svg width="16" height="16" viewBox="0 0 24 24" fill="#3b82f6" style={{ marginLeft: 'auto' }}>
-                      <polyline points="20 6 9 17 4 12" stroke="#3b82f6" strokeWidth="2" fill="none"></polyline>
-                    </svg>
-                  )}
-                </button>
 
                 <div style={{ height: '1px', background: 'var(--border-modal)', margin: '8px 0' }}></div>
                 
@@ -2595,6 +2619,7 @@ function App() {
           )}
         </div>
       </footer>
+      )}
 
       {/* Sidebar Overlay */}
       {isSidebarOpen && (
@@ -2682,6 +2707,36 @@ function App() {
               <line x1="5" y1="12" x2="19" y2="12"></line>
             </svg>
             Nueva Conversación
+          </button>
+
+          {/* Meeting Mode Button */}
+          <button
+            onClick={() => {
+              setIsMeetingMode(true);
+              setIsSidebarOpen(false);
+            }}
+            style={{
+              width: '100%',
+              padding: '12px 16px',
+              marginTop: '8px',
+              background: isMeetingMode ? 'var(--color-accent)' : 'var(--bg-dark-tertiary)',
+              border: '1px solid var(--border-modal)',
+              borderRadius: '10px',
+              color: isMeetingMode ? 'var(--color-on-accent)' : 'var(--color-white)',
+              fontSize: '14px',
+              fontWeight: 600,
+              cursor: 'pointer',
+              display: 'flex',
+              alignItems: 'center',
+              justifyContent: 'center',
+              gap: '8px',
+              transition: 'all 0.2s'
+            }}
+          >
+            <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+              <path d="M15 10l4.553-2.276A1 1 0 0121 8.618v6.764a1 1 0 01-1.447.894L15 14M5 18h8a2 2 0 002-2V8a2 2 0 00-2-2H5a2 2 0 00-2 2v8a2 2 0 002 2z" />
+            </svg>
+            Agente de Reuniones
           </button>
         </div>
 
@@ -2828,26 +2883,49 @@ function App() {
                   {formatRelativeTime(chat.updatedAt)}
                 </div>
               </div>
-              <button
-                onClick={(e) => deleteChat(chat.id, e)}
-                style={{
-                  background: 'none',
-                  border: 'none',
-                  cursor: 'pointer',
-                  color: 'var(--color-gray-medium)',
-                  padding: '4px',
-                  opacity: 0.6,
-                  transition: 'opacity 0.2s'
-                }}
-                onMouseOver={(e) => { e.currentTarget.style.opacity = '1'; e.currentTarget.style.color = '#ef4444'; }}
-                onMouseOut={(e) => { e.currentTarget.style.opacity = '0.6'; e.currentTarget.style.color = 'var(--color-gray-medium)'; }}
-                title="Eliminar conversación"
-              >
-                <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
-                  <polyline points="3 6 5 6 21 6"></polyline>
-                  <path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"></path>
-                </svg>
-              </button>
+              <div style={{ display: 'flex', gap: '4px' }}>
+                <button
+                    onClick={(e) => { e.stopPropagation(); setMovingChatId(chat.id); }}
+                    style={{
+                    background: 'none',
+                    border: 'none',
+                    cursor: 'pointer',
+                    color: 'var(--color-gray-medium)',
+                    padding: '4px',
+                    opacity: 0.6,
+                    transition: 'opacity 0.2s'
+                    }}
+                    onMouseOver={(e) => { e.currentTarget.style.opacity = '1'; e.currentTarget.style.color = 'var(--color-accent)'; }}
+                    onMouseOut={(e) => { e.currentTarget.style.opacity = '0.6'; e.currentTarget.style.color = 'var(--color-gray-medium)'; }}
+                    title="Mover a proyecto"
+                >
+                    <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+                    <path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z"></path>
+                    {chat.folderId ? <line x1="12" y1="11" x2="12" y2="17"></line> : <line x1="12" y1="11" x2="12" y2="17"></line>}
+                    {chat.folderId ? <line x1="9" y1="14" x2="15" y2="14"></line> : <line x1="9" y1="14" x2="15" y2="14"></line>}
+                    </svg>
+                </button>
+                <button
+                    onClick={(e) => deleteChat(chat.id, e)}
+                    style={{
+                    background: 'none',
+                    border: 'none',
+                    cursor: 'pointer',
+                    color: 'var(--color-gray-medium)',
+                    padding: '4px',
+                    opacity: 0.6,
+                    transition: 'opacity 0.2s'
+                    }}
+                    onMouseOver={(e) => { e.currentTarget.style.opacity = '1'; e.currentTarget.style.color = '#ef4444'; }}
+                    onMouseOut={(e) => { e.currentTarget.style.opacity = '0.6'; e.currentTarget.style.color = 'var(--color-gray-medium)'; }}
+                    title="Eliminar conversación"
+                >
+                    <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+                    <polyline points="3 6 5 6 21 6"></polyline>
+                    <path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"></path>
+                    </svg>
+                </button>
+              </div>
             </div>
           ))}
 
@@ -2895,35 +2973,7 @@ function App() {
             Personalizar Lia
           </button>
 
-          <button
-            onClick={() => {
-              setFeedbackType('positive');
-              setFeedbackMessageContent('Feedback general desde sidebar');
-              setIsFeedbackModalOpen(true);
-              setIsSidebarOpen(false);
-            }}
-            style={{
-              width: '100%',
-              padding: '10px 12px',
-              background: 'transparent',
-              border: 'none',
-              borderRadius: '8px',
-              color: 'var(--color-white)',
-              fontSize: '13px',
-              cursor: 'pointer',
-              display: 'flex',
-              alignItems: 'center',
-              gap: '10px',
-              textAlign: 'left'
-            }}
-            onMouseOver={(e) => e.currentTarget.style.background = 'var(--bg-dark-tertiary)'}
-            onMouseOut={(e) => e.currentTarget.style.background = 'transparent'}
-          >
-            <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
-              <path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"></path>
-            </svg>
-            Enviar Feedback
-          </button>
+
 
           <button
             onClick={() => {
@@ -3045,20 +3095,97 @@ function App() {
         onSave={loadUserSettings}
       />
 
-      {/* Feedback Modal */}
-      <FeedbackModal
-        isOpen={isFeedbackModalOpen}
-        onClose={() => {
-          setIsFeedbackModalOpen(false);
-          setFeedbackType(null);
-          setFeedbackMessageContent('');
-        }}
-        type={feedbackType}
-        messageContent={feedbackMessageContent}
-        modelUsed="gemini-2.0-flash"
-        user={user}
-        supabase={supabase}
-      />
+      {/* Move Chat Modal */}
+      {movingChatId && (
+        <div style={{
+          position: 'fixed',
+          top: 0,
+          left: 0,
+          right: 0,
+          bottom: 0,
+          backgroundColor: 'rgba(0,0,0,0.6)',
+          backdropFilter: 'blur(4px)',
+          zIndex: 10002,
+          display: 'flex',
+          alignItems: 'center',
+          justifyContent: 'center'
+        }} onClick={() => setMovingChatId(null)}>
+          <div style={{
+            width: '320px',
+            background: 'var(--bg-modal)',
+            borderRadius: '16px',
+            border: '1px solid var(--border-modal)',
+            padding: '20px',
+            boxShadow: 'var(--shadow-modal)'
+          }} onClick={e => e.stopPropagation()}>
+            <h3 style={{ color: 'var(--color-white)', fontSize: '16px', margin: '0 0 16px 0' }}>Mover a Proyecto</h3>
+            <div style={{ maxHeight: '300px', overflowY: 'auto' }}>
+                <button
+                    onClick={() => moveChatToFolder(movingChatId, null)} // Null for removing from folder
+                    style={{
+                        width: '100%',
+                        padding: '10px',
+                        textAlign: 'left',
+                        background: 'transparent',
+                        border: 'none',
+                        color: 'var(--color-white)',
+                        cursor: 'pointer',
+                        borderRadius: '8px',
+                        marginBottom: '4px',
+                        display: 'flex',
+                        alignItems: 'center',
+                        gap: '8px'
+                    }}
+                    onMouseOver={(e) => e.currentTarget.style.background = 'var(--bg-dark-tertiary)'}
+                    onMouseOut={(e) => e.currentTarget.style.background = 'transparent'}
+                >
+                    <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><path d="M3 9l9-7 9 7v11a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"></path><polyline points="9 22 9 12 15 12 15 22"></polyline></svg>
+                    Sin Proyecto (General)
+                </button>
+                {Array.from(folders.values()).map(folder => (
+                    <button
+                        key={folder.id}
+                        onClick={() => moveChatToFolder(movingChatId, folder.id)}
+                        style={{
+                            width: '100%',
+                            padding: '10px',
+                            textAlign: 'left',
+                            background: 'transparent',
+                            border: 'none',
+                            color: 'var(--color-white)',
+                            cursor: 'pointer',
+                            borderRadius: '8px',
+                            marginBottom: '4px',
+                            display: 'flex',
+                            alignItems: 'center',
+                            gap: '8px'
+                        }}
+                        onMouseOver={(e) => e.currentTarget.style.background = 'var(--bg-dark-tertiary)'}
+                        onMouseOut={(e) => e.currentTarget.style.background = 'transparent'}
+                    >
+                        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z"></path></svg>
+                        {folder.name}
+                    </button>
+                ))}
+            </div>
+            <div style={{ display: 'flex', justifyContent: 'flex-end', marginTop: '16px' }}>
+                <button
+                    onClick={() => setMovingChatId(null)}
+                    style={{
+                        padding: '8px 16px',
+                        background: 'var(--bg-dark-tertiary)',
+                        border: '1px solid var(--border-modal)',
+                        borderRadius: '8px',
+                        color: 'var(--color-white)',
+                        cursor: 'pointer'
+                    }}
+                >
+                    Cancelar
+                </button>
+            </div>
+          </div>
+        </div>
+      )}
 
       {/* Premium Model Selector Modal */}
       {isModelSelectorOpen && (

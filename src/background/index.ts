@@ -6,6 +6,14 @@ let pendingSelection: { action: string; text: string; prompt: string } | null = 
 // Track which tabs already have the content script
 const injectedTabs = new Set<number>();
 
+// Track active meeting capture streams
+interface MeetingCaptureInfo {
+  tabId: number;
+  streamId: string;
+  startTime: number;
+}
+let activeMeetingCapture: MeetingCaptureInfo | null = null;
+
 chrome.runtime.onInstalled.addListener(() => {
   console.log('Lia Extension installed');
   
@@ -146,6 +154,119 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
     }
     sendResponse(selection);
   }
-  
+
+  // ============================================
+  // MEETING TAB CAPTURE HANDLERS
+  // ============================================
+
+  if (message.type === 'START_TAB_AUDIO_CAPTURE') {
+    const { tabId } = message;
+    console.log('Starting tab audio capture for tab:', tabId);
+
+    // Check if already capturing
+    if (activeMeetingCapture && activeMeetingCapture.tabId === tabId) {
+      console.log('Already capturing from this tab');
+      sendResponse({ error: 'Ya se está capturando audio de esta pestaña' });
+      return true;
+    }
+
+    // Stop any existing capture first
+    if (activeMeetingCapture) {
+      console.log('Stopping previous capture');
+      activeMeetingCapture = null;
+    }
+
+    // In Manifest V3, we use getMediaStreamId instead of capture
+    // The actual MediaStream must be created in the popup/side panel context
+    chrome.tabCapture.getMediaStreamId(
+      { targetTabId: tabId },
+      (streamId) => {
+        if (chrome.runtime.lastError) {
+          console.error('Tab capture error:', chrome.runtime.lastError.message);
+          sendResponse({ error: chrome.runtime.lastError.message });
+          return;
+        }
+
+        if (!streamId) {
+          console.error('No stream ID received from tabCapture');
+          sendResponse({ error: 'No se pudo obtener el ID de stream de la pestaña' });
+          return;
+        }
+
+        // Store capture info
+        activeMeetingCapture = {
+          tabId,
+          streamId,
+          startTime: Date.now()
+        };
+
+        console.log('Tab audio capture stream ID obtained:', streamId);
+
+        // Return the stream ID - the popup will create the actual MediaStream
+        sendResponse({
+          success: true,
+          streamId,
+          message: 'ID de stream obtenido'
+        });
+      }
+    );
+
+    return true; // Keep channel open for async response
+  }
+
+  if (message.type === 'GET_TAB_CAPTURE_STREAM_ID') {
+    const { tabId } = message;
+    console.log('Getting stream ID for tab:', tabId);
+
+    chrome.tabCapture.getMediaStreamId(
+      { targetTabId: tabId },
+      (streamId) => {
+        if (chrome.runtime.lastError) {
+          console.error('getMediaStreamId error:', chrome.runtime.lastError.message);
+          sendResponse({ error: chrome.runtime.lastError.message });
+          return;
+        }
+
+        console.log('Got stream ID:', streamId);
+        sendResponse({ streamId });
+      }
+    );
+
+    return true; // Keep channel open for async response
+  }
+
+  if (message.type === 'STOP_TAB_AUDIO_CAPTURE') {
+    console.log('Stopping tab audio capture');
+
+    if (activeMeetingCapture) {
+      activeMeetingCapture = null;
+      console.log('Tab audio capture stopped');
+      sendResponse({ success: true, message: 'Captura de audio detenida' });
+    } else {
+      sendResponse({ success: true, message: 'No había captura activa' });
+    }
+
+    return true;
+  }
+
+  if (message.type === 'GET_MEETING_CAPTURE_STATE') {
+    sendResponse({
+      isCapturing: activeMeetingCapture !== null,
+      captureInfo: activeMeetingCapture
+    });
+    return true;
+  }
+
+  if (message.type === 'CHECK_TAB_CAPTURE_PERMISSION') {
+    // Check if we have tab capture permission
+    chrome.permissions.contains(
+      { permissions: ['tabCapture'] },
+      (hasPermission) => {
+        sendResponse({ hasPermission });
+      }
+    );
+    return true;
+  }
+
   return true;
 });

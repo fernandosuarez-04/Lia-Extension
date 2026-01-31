@@ -1,5 +1,256 @@
 console.log('Lia Content Script loaded');
 
+import { MeetSpeakerDetector, MeetParticipant, SpeakerChangeEvent } from '../services/meet-speaker-detector';
+
+// ============================================
+// SPEAKER DETECTION
+// ============================================
+
+let speakerDetector: MeetSpeakerDetector | null = null;
+let currentActiveSpeaker: string | null = null;
+let meetingParticipants: MeetParticipant[] = [];
+
+/**
+ * Start speaker detection for Google Meet
+ */
+function startSpeakerDetection(): void {
+  if (speakerDetector) {
+    console.log('Lia: Speaker detector already running');
+    return;
+  }
+
+  const platform = detectMeetingPlatform();
+  if (platform !== 'google-meet') {
+    console.log('Lia: Speaker detection only supported for Google Meet');
+    return;
+  }
+
+  console.log('Lia: Starting speaker detection...');
+  speakerDetector = new MeetSpeakerDetector();
+
+  speakerDetector.start({
+    onSpeakerChange: (event: SpeakerChangeEvent) => {
+      currentActiveSpeaker = event.currentSpeaker;
+      console.log('Lia: Speaker changed to:', currentActiveSpeaker);
+
+      // Notify popup/background about speaker change
+      chrome.runtime.sendMessage({
+        type: 'SPEAKER_CHANGED',
+        speaker: event.currentSpeaker,
+        previousSpeaker: event.previousSpeaker,
+        timestamp: event.timestamp
+      }).catch(() => {
+        // Ignore errors if no listener
+      });
+    },
+    onParticipantsUpdate: (participants: MeetParticipant[]) => {
+      meetingParticipants = participants;
+      console.log('Lia: Participants updated:', participants.map(p => p.name));
+
+      // Notify popup/background about participants
+      chrome.runtime.sendMessage({
+        type: 'PARTICIPANTS_UPDATED',
+        participants: participants
+      }).catch(() => {
+        // Ignore errors if no listener
+      });
+    }
+  });
+}
+
+/**
+ * Stop speaker detection
+ */
+function stopSpeakerDetection(): void {
+  if (speakerDetector) {
+    speakerDetector.stop();
+    speakerDetector = null;
+    currentActiveSpeaker = null;
+    meetingParticipants = [];
+    console.log('Lia: Speaker detection stopped');
+  }
+}
+
+/**
+ * Get current active speaker
+ */
+function getActiveSpeaker(): string | null {
+  return speakerDetector?.getCurrentSpeaker() || currentActiveSpeaker;
+}
+
+/**
+ * Get list of meeting participants
+ */
+function getMeetingParticipants(): MeetParticipant[] {
+  return speakerDetector?.getParticipants() || meetingParticipants;
+}
+
+// ============================================
+// MEETING DETECTION FUNCTIONS
+// ============================================
+
+type MeetingPlatform = 'google-meet' | 'zoom' | null;
+
+interface MeetingInfo {
+  platform: MeetingPlatform;
+  title?: string;
+  meetingUrl?: string;
+  participantCount?: number;
+  isActive: boolean;
+}
+
+/**
+ * Detect if current page is a meeting platform
+ */
+function detectMeetingPlatform(): MeetingPlatform {
+  const url = window.location.href;
+
+  // Google Meet detection
+  if (url.includes('meet.google.com') && !url.includes('/landing')) {
+    return 'google-meet';
+  }
+
+  // Zoom Web Client detection
+  if (url.includes('zoom.us/wc') || url.includes('zoom.us/j') || url.includes('zoom.us/s')) {
+    return 'zoom';
+  }
+
+  return null;
+}
+
+/**
+ * Get meeting information from the current page
+ */
+function getMeetingInfo(): MeetingInfo {
+  const platform = detectMeetingPlatform();
+
+  if (!platform) {
+    return { platform: null, isActive: false };
+  }
+
+  const info: MeetingInfo = {
+    platform,
+    meetingUrl: window.location.href,
+    isActive: true
+  };
+
+  if (platform === 'google-meet') {
+    // Try to get meeting title
+    const titleSelectors = [
+      '[data-meeting-title]',
+      '[data-call-id] h1',
+      'c-wiz[data-call-id] div[jscontroller] span'
+    ];
+
+    for (const selector of titleSelectors) {
+      const el = document.querySelector(selector);
+      if (el?.textContent) {
+        info.title = el.textContent.trim();
+        break;
+      }
+    }
+
+    // If no title found, use meeting code from URL
+    if (!info.title) {
+      const meetCode = window.location.pathname.split('/').pop();
+      if (meetCode && meetCode.length > 0) {
+        info.title = `Meet: ${meetCode}`;
+      }
+    }
+
+    // Try to count participants
+    const participantElements = document.querySelectorAll('[data-participant-id]');
+    if (participantElements.length > 0) {
+      info.participantCount = participantElements.length;
+    }
+
+    // Check if meeting is active (has video elements or call controls)
+    // Use multiple detection strategies for robustness
+    const isActiveSelectors = [
+      'video',
+      '[data-self-name]',
+      '[aria-label*="Leave"]',
+      '[aria-label*="Salir"]',
+      '[aria-label*="call"]',
+      '[aria-label*="llamada"]',
+      '[aria-label*="Colgar"]',
+      '[aria-label*="Hang up"]',
+      '[data-call-id]',
+      '[data-meeting-code]',
+      '[jscontroller][jsaction*="call"]',
+      'button[aria-label*="microphone"]',
+      'button[aria-label*="micrófono"]',
+      'button[aria-label*="camera"]',
+      'button[aria-label*="cámara"]',
+      '[data-is-muted]',
+      '[data-tooltip*="micrófono"]',
+      '[data-tooltip*="microphone"]'
+    ];
+
+    // Check for active meeting indicators
+    const hasActiveIndicator = isActiveSelectors.some(sel => {
+      try {
+        return document.querySelector(sel) !== null;
+      } catch {
+        return false;
+      }
+    });
+
+    // Also check if URL has meeting code pattern (xxx-xxxx-xxx)
+    const meetingCodePattern = /\/[a-z]{3}-[a-z]{4}-[a-z]{3}/i;
+    const hasMeetingCode = meetingCodePattern.test(window.location.pathname);
+
+    // Consider active if we have indicators OR if we have a valid meeting code in URL
+    info.isActive = hasActiveIndicator || hasMeetingCode;
+
+    console.log('Lia: Meeting detection - hasActiveIndicator:', hasActiveIndicator, 'hasMeetingCode:', hasMeetingCode, 'isActive:', info.isActive);
+  }
+
+  if (platform === 'zoom') {
+    // Try to get meeting title from Zoom
+    const zoomTitleSelectors = [
+      '.meeting-topic',
+      '[class*="meeting-title"]',
+      '.zm-header__title'
+    ];
+
+    for (const selector of zoomTitleSelectors) {
+      const el = document.querySelector(selector);
+      if (el?.textContent) {
+        info.title = el.textContent.trim();
+        break;
+      }
+    }
+
+    // Count participants in Zoom
+    const zoomParticipants = document.querySelectorAll('[class*="participant-item"]');
+    if (zoomParticipants.length > 0) {
+      info.participantCount = zoomParticipants.length;
+    }
+
+    // Check if Zoom meeting is active
+    const zoomActiveSelectors = [
+      'video',
+      '[class*="leave-btn"]',
+      '.meeting-client'
+    ];
+
+    info.isActive = zoomActiveSelectors.some(sel =>
+      document.querySelector(sel) !== null
+    );
+  }
+
+  return info;
+}
+
+/**
+ * Check if the page has a meeting that can be captured
+ */
+function canCaptureMeeting(): boolean {
+  const info = getMeetingInfo();
+  return info.platform !== null && info.isActive;
+}
+
 // ============================================
 // DOM Analysis Functions
 // ============================================
@@ -989,6 +1240,71 @@ chrome.runtime.onMessage.addListener((request, _sender, sendResponse) => {
           maximumAge: 300000 // 5 minutos de cache
         }
       );
+      break;
+
+    // ============================================
+    // MEETING DETECTION HANDLERS
+    // ============================================
+
+    case 'detectMeeting':
+      // Detect if current page is a meeting
+      console.log('Lia: Detectando reunión...');
+      const platform = detectMeetingPlatform();
+      sendResponse({
+        platform,
+        isMeeting: platform !== null
+      });
+      break;
+
+    case 'getMeetingInfo':
+      // Get detailed meeting information
+      console.log('Lia: Obteniendo información de reunión...');
+      const meetingInfo = getMeetingInfo();
+      sendResponse(meetingInfo);
+      break;
+
+    case 'canCaptureMeeting':
+      // Check if meeting can be captured
+      console.log('Lia: Verificando si se puede capturar reunión...');
+      sendResponse({
+        canCapture: canCaptureMeeting(),
+        meetingInfo: getMeetingInfo()
+      });
+      break;
+
+    // ============================================
+    // SPEAKER DETECTION HANDLERS
+    // ============================================
+
+    case 'startSpeakerDetection':
+      // Start detecting active speaker in Google Meet
+      console.log('Lia: Iniciando detección de hablantes...');
+      startSpeakerDetection();
+      sendResponse({ success: true });
+      break;
+
+    case 'stopSpeakerDetection':
+      // Stop speaker detection
+      console.log('Lia: Deteniendo detección de hablantes...');
+      stopSpeakerDetection();
+      sendResponse({ success: true });
+      break;
+
+    case 'getActiveSpeaker':
+      // Get current active speaker
+      console.log('Lia: Obteniendo hablante activo...');
+      sendResponse({
+        speaker: getActiveSpeaker(),
+        participants: getMeetingParticipants()
+      });
+      break;
+
+    case 'getParticipants':
+      // Get list of meeting participants
+      console.log('Lia: Obteniendo lista de participantes...');
+      sendResponse({
+        participants: getMeetingParticipants()
+      });
       break;
 
     default:

@@ -294,6 +294,7 @@ export interface GroundingMetadata {
 export interface MapPlace {
   placeId?: string;
   name: string;
+  location?: { lat: number; lng: number };
   address?: string;
   rating?: number;
   uri?: string;
@@ -334,84 +335,82 @@ export const runMapsQuery = async (
     console.log("Starting Maps Query with prompt:", prompt);
     console.log("Location:", location);
 
-    // Crear modelo con Maps Grounding - IMPORTANTE: Gemini 3 NO soporta Maps
-    // Debemos usar Gemini 2.5 o 2.0
+    // Crear modelo con Maps Grounding
+    // Usamos gemini-2.0-flash para mejor soporte de JSON + Tools
     const mapsModel = genAI.getGenerativeModel({
-      model: MODELS.FALLBACK, // gemini-2.5-flash que sí soporta Maps
+      model: "gemini-2.5-flash", 
     });
 
-    // Usar generateContent con la configuración de Maps
+    // Construir prompt para JSON
+    const jsonPrompt = `
+      Actúa como un asistente de local y guía turística.
+      El usuario está en: Lat ${location.latitude}, Lng ${location.longitude}.
+      Búsqueda: "${prompt}".
+
+      Usa la herramienta Google Maps para encontrar lugares reales y relevantes cercanos.
+      
+      IMPORTANTE: Debes responder EXCLUSIVAMENTE con un objeto JSON válido (sin markdown, sin texto extra) con la siguiente estructura:
+      {
+        "summary": "Un breve resumen texto de 1 o 2 frases sobre lo encontrado",
+        "places": [
+          {
+            "name": "Nombre del lugar",
+            "location": { "lat": 0.0, "lng": 0.0 }, // Coordenadas aproximadas
+            "address": "Dirección corta",
+            "rating": 4.5,
+            "description": "Breve razón de por qué es bueno",
+            "uri": "URL de Google Maps si está disponible o link de búsqueda"
+          }
+        ]
+      }
+    `;
+
+    // Usar generateContent
+    // NOTA: No podemos usar responseMimeType: "application/json" junto con tools (Search/Maps) en la misma request actualmente.
+    // Dependemos del prompt para obtener JSON.
     const result = await (mapsModel as any).generateContent({
       contents: [{
         role: "user",
-        parts: [{
-          text: `Eres un asistente de ubicaciones. Responde en español de forma útil y concisa.
-
-Pregunta del usuario: ${prompt}
-
-Proporciona información relevante sobre los lugares, incluyendo:
-- Nombre del lugar
-- Dirección aproximada
-- Por qué es una buena opción
-- Horarios si es relevante`
-        }]
+        parts: [{ text: jsonPrompt }]
       }],
-      tools: [{ googleMaps: {} }],
-      toolConfig: {
-        retrievalConfig: {
-          latLng: {
-            latitude: location.latitude,
-            longitude: location.longitude
-          }
-        }
-      }
+      tools: [{ googleMaps: {} }]
     });
 
     const response = result.response;
-    const candidate = response.candidates?.[0];
+    const textData = response.text();
+    console.log("Maps JSON Response:", textData);
 
-    let textResponse = '';
-    const places: MapPlace[] = [];
-    let widgetToken: string | undefined;
-
-    // Extraer texto
-    if (candidate?.content?.parts) {
-      for (const part of candidate.content.parts) {
-        if (part.text) {
-          textResponse += part.text;
-        }
-      }
-    }
-
-    // Extraer metadata de grounding (lugares)
-    if (candidate?.groundingMetadata) {
-      const metadata = candidate.groundingMetadata as MapsGroundingMetadata;
-
-      // Token para widget de Maps
-      widgetToken = metadata.googleMapsWidgetContextToken;
-
-      // Extraer lugares de los chunks
-      if (metadata.groundingChunks) {
-        for (const chunk of metadata.groundingChunks) {
-          if (chunk.retrievedContext || chunk.web) {
-            const source = chunk.retrievedContext || chunk.web;
-            if (source) {
-              places.push({
-                name: source.title || 'Lugar',
-                uri: source.uri,
-              });
+    let parsedData: { summary: string; places: any[] } = { summary: '', places: [] };
+    
+    try {
+        parsedData = JSON.parse(textData);
+    } catch (e) {
+        console.error("Error parsing Maps JSON:", e);
+        // Fallback simple parsing if model adds markdown blocks
+        const match = textData.match(/\{[\s\S]*\}/);
+        if (match) {
+            try {
+                parsedData = JSON.parse(match[0]);
+            } catch (e2) {
+                return { text: "No pude procesar los resultados del mapa.", places: [] };
             }
-          }
+        } else {
+             return { text: "Hubo un error interpretando los datos del mapa.", places: [] };
         }
-      }
     }
 
-    console.log("Maps Query completed. Places found:", places.length);
+    const places: MapPlace[] = parsedData.places.map((p: any) => ({
+        name: p.name,
+        location: p.location, // { lat, lng }
+        address: p.address,
+        rating: p.rating,
+        uri: p.uri || `https://www.google.com/maps/search/?api=1&query=${encodeURIComponent(p.name)}`
+    }));
 
     return {
-      text: textResponse || 'No encontré información sobre lugares cercanos.',
+      text: parsedData.summary || `Encontré ${places.length} lugares cercanos.`,
       places,
-      widgetToken
+      widgetToken: undefined 
     };
 
   } catch (error) {

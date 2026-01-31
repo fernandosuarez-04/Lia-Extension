@@ -319,3 +319,19 @@ input, textarea {
   transition: none;
 }
 
+/* Typewriter Cursor */
+.typing-cursor::after {
+  content: '▋';
+  display: inline-block;
+  vertical-align: baseline;
+  animation: blink 1s step-end infinite;
+  margin-left: 2px;
+  color: var(--color-accent);
+  font-size: 0.9em;
+}
+
+@keyframes blink {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0; }
+}
+

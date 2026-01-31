@@ -10,7 +10,9 @@
       "Bash(npm view:*)",
       "Bash(npm run build:*)",
       "Bash(cmd /c \"type .env\")",
-      "Bash(git checkout:*)"
+      "Bash(git checkout:*)",
+      "Bash(xargs cat:*)",
+      "Bash(npm install:*)"
     ]
   }
 }
