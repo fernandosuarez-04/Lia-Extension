@@ -5,7 +5,6 @@ import {
   buildComputerUsePrompt,
   buildPrimaryChatPrompt,
   PRIMARY_CHAT_PROMPT,
-  DEEP_RESEARCH_PROMPT,
   PROMPT_OPTIMIZER,
   AUDIO_TRANSCRIPTION_PROMPT,
   getImageGenerationPrompt,
@@ -38,11 +37,8 @@ const imageGenerationModel = genAI.getGenerativeModel({
   model: MODELS.IMAGE_GENERATION,
 });
 
-// Deep Research Model
-const deepResearchModel = genAI.getGenerativeModel({
-  model: MODELS.DEEP_RESEARCH,
-  tools: searchTools,
-});
+// Deep Research uses Interactions API (not standard generateContent)
+// Model ID defined in config.ts: MODELS.DEEP_RESEARCH
 
 // PRO Model for Prompt Engineering
 const proModel = genAI.getGenerativeModel({
@@ -51,51 +47,200 @@ const proModel = genAI.getGenerativeModel({
 
 let chatSession: any = null;
 
-// Deep Research Function
+// Deep Research Function - Uses official @google/genai SDK for Interactions API
+// Documentation: https://ai.google.dev/gemini-api/docs/deep-research
+// Deep Research analyzes up to 100+ sources and takes 2-15 minutes to complete
 export const runDeepResearch = async (prompt: string) => {
   try {
-    console.log("Starting Deep Research with prompt:", prompt);
-    
-    // Create a new chat session specifically for research to avoid polluting main chat history initially
-    // or we can treat it as a one-off generation. Deep Research is often a complex process.
-    // For simplicity and seamless integration, we'll run it as a chat but with a specific system prompt.
-    
-    const researchChat = deepResearchModel.startChat({
-      history: [
-        {
-          role: "user",
-          parts: [{ text: DEEP_RESEARCH_PROMPT.user }]
-        },
-        {
-          role: "model",
-          parts: [{ text: DEEP_RESEARCH_PROMPT.model }]
-        }
-      ]
+    console.log("🔬 Starting Deep Research with prompt:", prompt);
+    console.log("📚 Agent:", MODELS.DEEP_RESEARCH);
+
+    // Import the new Google GenAI SDK (required for Interactions API)
+    const { GoogleGenAI } = await import('@google/genai');
+    const client = new GoogleGenAI({ apiKey: GOOGLE_API_KEY });
+
+    // Step 1: Create the research interaction
+    console.log("📤 Creating interaction...");
+    const interaction = await client.interactions.create({
+      agent: MODELS.DEEP_RESEARCH as 'deep-research-pro-preview-12-2025',
+      input: prompt,
+      background: true // Required for async execution
     });
 
-    const result = await researchChat.sendMessageStream(prompt);
-    
-    return {
-        stream: result.stream,
-        getGroundingMetadata: async () => {
-          try {
-            const response = await result.response;
-            const candidate = response.candidates?.[0];
-            if (candidate?.groundingMetadata) {
-              return candidate.groundingMetadata;
+    // Get interaction ID - can be in 'name' or 'id' field
+    const interactionId = (interaction as any).name || (interaction as any).id;
+    if (!interactionId) {
+      console.log("Full interaction response:", JSON.stringify(interaction, null, 2));
+      throw new Error("No interaction ID received from API");
+    }
+    console.log("✅ Deep Research interaction created:", interactionId);
+
+    // Step 2: Poll for results - Deep Research takes 2-15 minutes
+    async function* pollForResults(): AsyncGenerator<{ text: () => string }> {
+      let isComplete = false;
+      let pollCount = 0;
+      const POLL_INTERVAL_MS = 15000; // 15 seconds between polls
+      const MAX_POLLS = 60; // 60 polls * 15 seconds = 15 minutes max
+
+      // Initial status message
+      yield { text: () => "# 🔬 Investigación Profunda Iniciada\n\n" };
+      yield { text: () => "Lia está analizando múltiples fuentes web para darte una respuesta completa y fundamentada.\n\n" };
+      yield { text: () => "⏱️ **Tiempo estimado:** 2-10 minutos\n\n---\n\n" };
+
+      while (!isComplete && pollCount < MAX_POLLS) {
+        pollCount++;
+
+        // Wait before polling
+        await new Promise(resolve => setTimeout(resolve, POLL_INTERVAL_MS));
+
+        const elapsedMinutes = Math.floor((pollCount * 15) / 60);
+        const elapsedSeconds = (pollCount * 15) % 60;
+
+        try {
+          // Poll using the SDK - get(id, params)
+          const result = await client.interactions.get(interactionId) as any;
+
+          const status = result.status || (result.done ? "COMPLETED" : "IN_PROGRESS");
+          console.log(`🔄 Poll #${pollCount} (${elapsedMinutes}m ${elapsedSeconds}s): Status = ${status}`);
+
+          // Show progress
+          yield { text: () => `🔍 **Investigando...** (${elapsedMinutes}m ${elapsedSeconds}s)\n` };
+
+          // Check for completion
+          if (status === "COMPLETED" || status === "completed" || result.done === true) {
+            isComplete = true;
+            console.log("✅ Research completed!");
+            console.log("Full result:", JSON.stringify(result, null, 2).substring(0, 1000));
+
+            // Extract final response - try multiple formats
+            let finalText = "";
+
+            // Format 1: outputs array (Interactions API standard)
+            if (result.outputs && Array.isArray(result.outputs)) {
+              const lastOutput = result.outputs[result.outputs.length - 1];
+              if (lastOutput?.text) {
+                finalText = lastOutput.text;
+              } else if (typeof lastOutput === 'string') {
+                finalText = lastOutput;
+              }
             }
-            return null;
-          } catch {
-            return null;
+
+            // Format 2: modelContent.parts
+            if (!finalText && result.modelContent?.parts) {
+              for (const part of result.modelContent.parts) {
+                if (part.text) finalText += part.text;
+              }
+            }
+
+            // Format 3: content.parts
+            if (!finalText && result.content?.parts) {
+              for (const part of result.content.parts) {
+                if (part.text) finalText += part.text;
+              }
+            }
+
+            // Format 4: Direct text field
+            if (!finalText && result.text) {
+              finalText = result.text;
+            }
+
+            if (finalText) {
+              yield { text: () => "\n\n---\n\n# 📋 Resultado de la Investigación\n\n" };
+              yield { text: () => finalText };
+            } else {
+              yield { text: () => "\n\n⚠️ La investigación terminó pero no se obtuvo contenido.\n" };
+              console.log("Full response:", JSON.stringify(result, null, 2));
+            }
+          }
+
+          // Check for failure
+          if (status === "FAILED" || status === "failed" || status === "CANCELLED" || status === "cancelled") {
+            isComplete = true;
+            const errorMsg = result.error?.message || result.error || "Error desconocido";
+            yield { text: () => `\n\n❌ **La investigación falló:** ${errorMsg}\n` };
+          }
+
+        } catch (pollError: any) {
+          console.error(`❌ Poll #${pollCount} error:`, pollError);
+          // Continue polling unless it's a fatal error
+          if (pollError.message?.includes('not found') || pollError.message?.includes('404')) {
+            yield { text: () => `\n\n❌ **Error:** La investigación no se encontró.\n` };
+            isComplete = true;
           }
         }
-      };
+      }
 
-  } catch (error) {
-    console.error("Deep Research error:", error);
+      if (!isComplete) {
+        yield { text: () => "\n\n⚠️ La investigación está tomando más de 15 minutos. Por favor intenta con una consulta más específica.\n" };
+      }
+    }
+
+    return {
+      stream: pollForResults(),
+      getGroundingMetadata: async () => null
+    };
+
+  } catch (error: any) {
+    console.error("❌ Deep Research error:", error);
+
+    // If SDK doesn't support interactions, fall back to enhanced search
+    if (error.message?.includes('interactions') || error.message?.includes('not a function') || error.message?.includes('not supported')) {
+      console.log("⚠️ Interactions API not available, falling back to enhanced search...");
+      return runEnhancedResearch(prompt);
+    }
+
     throw error;
   }
 };
+
+// Fallback: Enhanced Research using regular Gemini with Google Search grounding
+async function runEnhancedResearch(prompt: string) {
+  console.log("🔄 Using enhanced search fallback...");
+
+  const researchPrompt = `Realiza una investigación exhaustiva sobre el siguiente tema.
+Busca información en múltiples fuentes web y proporciona:
+
+1. **Resumen Ejecutivo** - Puntos clave en 2-3 párrafos
+2. **Análisis Detallado** - Información profunda del tema
+3. **Datos y Estadísticas** - Números y hechos relevantes
+4. **Diferentes Perspectivas** - Puntos de vista variados si aplica
+5. **Conclusiones** - Síntesis final
+
+TEMA A INVESTIGAR:
+${prompt}
+
+Responde de forma estructurada y completa, citando fuentes cuando sea posible.`;
+
+  const searchTools: any[] = [{ googleSearch: {} }];
+  const researchModel = genAI.getGenerativeModel({
+    model: MODELS.FALLBACK,
+    tools: searchTools,
+  });
+
+  const result = await researchModel.generateContentStream(researchPrompt);
+
+  return {
+    stream: (async function* () {
+      yield { text: () => "# 🔍 Investigación en Progreso\n\n" };
+      yield { text: () => "_Usando búsqueda avanzada con Google Search..._\n\n---\n\n" };
+
+      for await (const chunk of result.stream) {
+        const text = chunk.text();
+        if (text) {
+          yield { text: () => text };
+        }
+      }
+    })(),
+    getGroundingMetadata: async () => {
+      try {
+        const response = await result.response;
+        return response.candidates?.[0]?.groundingMetadata || null;
+      } catch {
+        return null;
+      }
+    }
+  };
+}
 
 
 

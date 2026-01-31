@@ -12,7 +12,9 @@
       "Bash(cmd /c \"type .env\")",
       "Bash(git checkout:*)",
       "Bash(xargs cat:*)",
-      "Bash(npm install:*)"
+      "Bash(npm install:*)",
+      "WebFetch(domain:www.theunwindai.com)",
+      "Bash(npm show:*)"
     ]
   }
 }

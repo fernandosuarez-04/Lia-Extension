@@ -8,6 +8,7 @@ import { SettingsModal } from './SettingsModal';
 import { FeedbackModal as _FeedbackModal } from './FeedbackModal';
 import { MapViewer } from '../components/MapViewer';
 import { MeetingPanel } from '../components/MeetingPanel';
+import { ProjectHub } from '../components/ProjectHub';
 
 interface GroundingSource {
   uri: string;
@@ -62,7 +63,7 @@ interface UserSettings {
 
 function App() {
   // Auth
-  const { session, loading: authLoading, signOut, user } = useAuth();
+  const { loading: authLoading, signOut, user } = useAuth();
 
   // Loading screen while checking auth
   if (authLoading) {
@@ -78,7 +79,8 @@ function App() {
   }
 
   // Show login if not authenticated
-  if (!session) {
+  // Usamos 'user' en lugar de 'session' porque SOFIA no usa sessions de Supabase
+  if (!user) {
     return <Auth />;
   }
 
@@ -170,6 +172,7 @@ function App() {
   const [isImageGenMode, setIsImageGenMode] = useState(false);
   const [isPromptOptimizerMode, setIsPromptOptimizerMode] = useState(false);
   const [targetAI, setTargetAI] = useState<'chatgpt' | 'claude' | 'gemini' | null>(null);
+  const [researchStep, setResearchStep] = useState<string>('Iniciando...');
 
   // Maps Mode States
   const [userLocation, setUserLocation] = useState<{ latitude: number; longitude: number } | null>(null);
@@ -197,6 +200,8 @@ function App() {
   const [isFolderModalOpen, setIsFolderModalOpen] = useState(false);
   const [newFolderName, setNewFolderName] = useState('');
   const [movingChatId, setMovingChatId] = useState<string | null>(null);
+  const [currentFolderId, setCurrentFolderId] = useState<string | null>(null);
+  const [targetFolderId, setTargetFolderId] = useState<string | null>(null);
 
   // Settings & Feedback Modals
   const [isSettingsModalOpen, setIsSettingsModalOpen] = useState(false);
@@ -354,20 +359,35 @@ function App() {
 
   // Save current chat
   const saveCurrentChat = useCallback(async () => {
-    if (messages.length === 0 || !user?.id) return;
+    if (messages.length === 0 || !user?.id) {
+      console.log('saveCurrentChat: Skipped - no messages or no user', { messagesCount: messages.length, userId: user?.id });
+      return;
+    }
+
+    console.log('saveCurrentChat: Starting with user.id =', user.id);
 
     try {
       let chatId = currentChatId;
       const title = generateChatTitle(messages);
 
       if (!chatId) {
+        console.log('saveCurrentChat: Creating new conversation...');
         const { data: newConv, error } = await supabase
           .from('conversations')
-          .insert({ user_id: user.id, title })
+          .insert({
+            user_id: user.id,
+            title,
+            folder_id: targetFolderId // Use target folder if set
+          })
           .select()
           .single();
 
-        if (error) throw error;
+        if (error) {
+          console.error('saveCurrentChat: Error creating conversation:', JSON.stringify(error, null, 2));
+          console.error('Error details:', { message: error.message, code: error.code, details: error.details, hint: error.hint });
+          throw error;
+        }
+        console.log('saveCurrentChat: Conversation created:', newConv);
         chatId = newConv.id;
         setCurrentChatId(chatId);
 
@@ -380,12 +400,29 @@ function App() {
 
       const { data: existingMsgs } = await supabase
         .from('messages')
-        .select('id')
+        .select('id, content')
         .eq('conversation_id', chatId);
 
-      const existingIds = new Set((existingMsgs || []).map(m => m.id));
-      const newMessages = messages.filter(m => !existingIds.has(m.id));
+      const existingMsgsMap = new Map((existingMsgs || []).map(m => [m.id, m.content]));
 
+      // Filter out transient messages
+      const validMessages = messages.filter(m =>
+        m.id !== 'live-connecting' &&
+        !m.id.startsWith('error-') &&
+        m.text && m.text.trim().length > 0 // Only save messages with actual content
+      );
+
+      // Separate into new messages and messages that need updating
+      const newMessages = validMessages.filter(m => !existingMsgsMap.has(m.id));
+      const messagesToUpdate = validMessages.filter(m => {
+        const existingContent = existingMsgsMap.get(m.id);
+        // Update if exists but content is different (and new content is not empty)
+        return existingContent !== undefined &&
+               existingContent !== m.text &&
+               m.text && m.text.trim().length > 0;
+      });
+
+      // Insert new messages
       if (newMessages.length > 0) {
         const messagesToInsert = newMessages.map(m => ({
           id: m.id,
@@ -396,7 +433,37 @@ function App() {
           metadata: { sources: m.sources, places: m.places, images: m.images }
         }));
 
-        await supabase.from('messages').insert(messagesToInsert);
+        console.log('Inserting new messages:', messagesToInsert.length);
+
+        const { error: insertError } = await supabase
+          .from('messages')
+          .insert(messagesToInsert);
+
+        if (insertError) {
+          console.error('Error inserting messages:', insertError);
+        } else {
+          console.log('Messages inserted successfully:', newMessages.length);
+        }
+      }
+
+      // Update existing messages with new content
+      if (messagesToUpdate.length > 0) {
+        console.log('Updating messages with new content:', messagesToUpdate.length);
+
+        for (const m of messagesToUpdate) {
+          const { error: updateError } = await supabase
+            .from('messages')
+            .update({
+              content: m.text,
+              metadata: { sources: m.sources, places: m.places, images: m.images }
+            })
+            .eq('id', m.id);
+
+          if (updateError) {
+            console.error('Error updating message:', m.id, updateError);
+          }
+        }
+        console.log('Messages updated successfully');
       }
 
       // Update local history
@@ -408,7 +475,7 @@ function App() {
           messages,
           createdAt: prev.find(c => c.id === chatId)?.createdAt || Date.now(),
           updatedAt: Date.now(),
-          folderId: prev.find(c => c.id === chatId)?.folderId
+          folderId: prev.find(c => c.id === chatId)?.folderId || targetFolderId
         };
 
         if (existingIndex >= 0) {
@@ -421,7 +488,7 @@ function App() {
     } catch (err) {
       console.error('Error saving chat:', err);
     }
-  }, [messages, currentChatId, user?.id]);
+  }, [messages, currentChatId, user?.id, targetFolderId]);
 
   // Create new chat
   const createNewChat = useCallback(() => {
@@ -432,12 +499,23 @@ function App() {
     if (typeof chrome !== 'undefined' && chrome.storage) {
       chrome.storage.local.remove('lia_current_chat_id');
     }
+    setCurrentFolderId(null);
+    setTargetFolderId(null);
   }, []);
+
+  const handleOpenProject = (folderId: string) => {
+    setCurrentFolderId(folderId);
+    setTargetFolderId(folderId);
+    setCurrentChatId(null);
+    setMessages([]);
+    setIsSidebarOpen(false);
+  };
 
   // Load a chat
   const loadChat = useCallback((chat: ChatSession) => {
     setMessages(chat.messages);
     setCurrentChatId(chat.id);
+    setCurrentFolderId(null); // Exit hub view
     setIsSidebarOpen(false);
     if (typeof chrome !== 'undefined' && chrome.storage) {
       chrome.storage.local.set({ lia_current_chat_id: chat.id });
@@ -526,8 +604,13 @@ function App() {
   // Auto-save chat (debounced)
   useEffect(() => {
     if (messages.length > 0 && user?.id) {
+      console.log('Auto-save triggered: user.id =', user.id, 'messages count =', messages.length);
       if (saveTimeoutRef.current) clearTimeout(saveTimeoutRef.current);
       saveTimeoutRef.current = setTimeout(() => {
+        // Verificar sesión antes de guardar
+        supabase.auth.getSession().then(({ data }) => {
+          console.log('Current Lia session before save:', data.session ? `User: ${data.session.user.id}` : 'No session');
+        });
         saveCurrentChat();
       }, 1000);
     }
@@ -701,8 +784,10 @@ function App() {
         onTextResponse: (text: string) => {
           // Handle text responses (if any)
           console.log("Live API: Text response:", text);
+          // Handle text responses (if any)
+          console.log("Live API: Text response:", text);
           setMessages(prev => [...prev, {
-            id: Date.now().toString(),
+            id: crypto.randomUUID(),
             role: 'model',
             text: text,
             timestamp: Date.now()
@@ -716,7 +801,7 @@ function App() {
           console.error("Live Client Error:", error);
           const errorMsg = error?.message || 'Error de conexión con Live API';
           setMessages(prev => [...prev, {
-            id: Date.now().toString(),
+            id: crypto.randomUUID(),
             role: 'model',
             text: `⚠️ **Error de Conversación en Vivo**\n\n${errorMsg}`,
             timestamp: Date.now()
@@ -738,7 +823,7 @@ function App() {
 
       // Remove connecting message and show success
       setMessages(prev => prev.filter(m => m.id !== 'live-connecting').concat({
-        id: Date.now().toString(),
+        id: crypto.randomUUID(),
         role: 'model',
         text: '🎤 **Conversación en vivo activada**\n\nAhora puedes hablar conmigo en tiempo real. Presiona el botón de micrófono (verde) para comenzar a hablar.',
         timestamp: Date.now()
@@ -756,7 +841,7 @@ function App() {
 
       // Remove connecting message and show error
       setMessages(prev => prev.filter(m => m.id !== 'live-connecting').concat({
-        id: Date.now().toString(),
+        id: crypto.randomUUID(),
         role: 'model',
         text: isPermissionError
           ? `⚠️ **Error de Permisos de Live API**\n\n${errorMsg}\n\n**Para solucionarlo:**\n1. Ve a [Google AI Studio](https://aistudio.google.com/)\n2. Crea una nueva API key o verifica que tu key tenga acceso a modelos Live\n3. Asegúrate de que "Generative Language API" esté habilitado en tu proyecto de Google Cloud\n\n*Nota: La Live API requiere permisos especiales que no todas las API keys tienen por defecto.*`
@@ -818,7 +903,7 @@ function App() {
       } catch (e: any) {
         console.error("Failed to start microphone:", e);
         setMessages(prev => [...prev, {
-          id: Date.now().toString(),
+          id: crypto.randomUUID(),
           role: 'model',
           text: `⚠️ **Error de Micrófono**\n\nNo se pudo acceder al micrófono. Asegúrate de dar permisos.`,
           timestamp: Date.now()
@@ -864,11 +949,41 @@ function App() {
       setSelectedContext(null);
     }
     
+    // PROJECT MEMORY INJECTION
+    // If we are in a project (targetFolderId is set) and this is a new chat (no currentChatId),
+    // inject recent context from the project history.
+    if (targetFolderId && !currentChatId) {
+        const projectChats = chatHistory.filter(c => c.folderId === targetFolderId);
+        if (projectChats.length > 0) {
+            // Get last 3 relevant interactions from recent chats to provide context
+            const recentContext = projectChats
+                .sort((a, b) => b.updatedAt - a.updatedAt) // Sort by most recent
+                .slice(0, 3) // Take top 3 chats
+                .map(chat => {
+                    // Extract last exchange
+                    const lastMsg = chat.messages[chat.messages.length - 1];
+                    const prevMsg = chat.messages[chat.messages.length - 2];
+                    if (lastMsg && prevMsg && prevMsg.role === 'user') {
+                        return `Tema: ${chat.title}\nUsuario: ${prevMsg.text.substring(0, 100)}...\nLia: ${lastMsg.text?.substring(0, 100)}...`;
+                    }
+                    return null;
+                })
+                .filter(Boolean)
+                .join('\n---\n');
+
+            if (recentContext) {
+                const projectContextPrompt = `[MEMORIA DEL PROYECTO: Estás trabajando en el proyecto. Aquí tienes contexto reciente de otras conversaciones en este proyecto para que tus respuestas sean coherentes y conectadas:\n${recentContext}\n]\n\n`;
+                apiMessage = projectContextPrompt + apiMessage;
+                console.log("Project Memory Injected:", projectContextPrompt);
+            }
+        }
+    }
+    
     if (!displayMessage && selectedImages.length === 0) return;
 
     if (isLiveActive && liveClientRef.current) {
       const userMessage: Message = {
-        id: Date.now().toString(),
+        id: crypto.randomUUID(),
         role: 'user',
         text: displayMessage,
         timestamp: Date.now(),
@@ -892,7 +1007,7 @@ function App() {
 
     if (!skipUserLog) {
         const userMessage: Message = {
-        id: Date.now().toString(),
+        id: crypto.randomUUID(),
         role: 'user',
         text: displayMessage,
         timestamp: Date.now(),
@@ -909,7 +1024,7 @@ function App() {
     
     setIsLoading(true);
 
-    const aiMessageId = (Date.now() + 1).toString();
+    const aiMessageId = crypto.randomUUID();
     const aiMessagePlaceholder: Message = {
       id: aiMessageId,
       role: 'model',
@@ -1061,40 +1176,30 @@ function App() {
          return;
       }
 
-      // If in Deep Research mode
+      // If in Deep Research mode - Uses Interactions API (asynchronous polling)
       if (isDeepResearch) {
         try {
           const { runDeepResearch } = await import('../services/gemini');
           const result = await runDeepResearch(apiMessage);
-          
-          let fullText = '';
-          
-          for await (const chunk of result.stream) {
-            let chunkText = '';
-            try {
-              chunkText = chunk.text();
-            } catch (e) {
-              // Might be a function call only, ignore text error
-            }
-            
-            fullText += chunkText;
 
-            // Check for function calls (e.g. Navigation)
-            const functionCalls = chunk.functionCalls ? chunk.functionCalls() : [];
-            if (functionCalls) {
-              for (const call of functionCalls) {
-                if (call.name === 'open_url') {
-                  const url = (call.args as any).url as string;
-                  if (url) {
-                    if (window.chrome && chrome.tabs && chrome.tabs.create) {
-                      chrome.tabs.create({ url });
-                    } else {
-                      window.open(url, '_blank');
-                    }
-                  }
-                }
-              }
+          let fullText = '';
+
+          
+          setResearchStep('Buscando información relevante...');
+          // Stream yields text updates from polling the research agent
+          for await (const chunk of result.stream) {
+            const chunkText = chunk.text();
+            
+            // Simple heuristic to update progress text based on content
+            if (chunkText.includes('Reading') || chunkText.includes('Leyendo')) {
+                 setResearchStep('Leyendo fuentes y extrayendo datos...');
+            } else if (chunkText.includes('Thinking') || chunkText.includes('Analizando')) {
+                 setResearchStep('Analizando información...');
+            } else if (fullText.length > 500 && researchStep !== 'Generando respuesta...') {
+                 setResearchStep('Generando respuesta final...');
             }
+
+            fullText += chunkText;
 
             setMessages((prev) =>
               prev.map(msg =>
@@ -1105,26 +1210,8 @@ function App() {
             );
           }
 
-          // Get grounding metadata (sources) for Research
-          const groundingMeta = await result.getGroundingMetadata();
-          if (groundingMeta?.groundingChunks) {
-            const sources: GroundingSource[] = groundingMeta.groundingChunks
-              .filter((chunk: any) => chunk.web)
-              .map((chunk: any) => ({
-                uri: chunk.web.uri,
-                title: chunk.web.title
-              }));
-            
-            if (sources.length > 0) {
-              setMessages((prev) =>
-                prev.map(msg =>
-                  msg.id === aiMessageId
-                    ? { ...msg, sources }
-                    : msg
-                )
-              );
-            }
-          }
+          // Grounding metadata handled internally by Interactions API
+          // Sources are included in the final response text
 
         } catch (error) {
           console.error('Deep Research error:', error);
@@ -1600,8 +1687,54 @@ function App() {
         </div>
       )}
 
-      {/* Main Chat Area - Hidden when meeting mode is active */}
-      {!isMeetingMode && (
+      {/* Project Hub - Shows when folder is selected and no active chat */}
+      {currentFolderId && !currentChatId && !isMeetingMode && (
+        <ProjectHub
+          folder={folders.find(f => f.id === currentFolderId)!}
+          chats={chatHistory.filter(c => c.folderId === currentFolderId)}
+          onNewChat={() => {
+              // Fallback or secondary action if needed, currently main action is input
+          }}
+          onOpenChat={(chatId) => {
+             const chat = chatHistory.find(c => c.id === chatId);
+             if (chat) loadChat(chat);
+          }}
+          onStartChatWithContext={(text, _files) => {
+              // Priority: set target folder so database saves it correctly
+              const folderId = currentFolderId;
+              setTargetFolderId(folderId);
+              
+              // Clear current view states to prepare for chat
+              setCurrentFolderId(null); 
+              setMessages([]);
+              setCurrentChatId(null);
+
+              // Trigger send message immediately
+              setTimeout(() => {
+                  handleSendMessage(text, null, false);
+              }, 50);
+          }}
+          onDeleteChat={deleteChat}
+          isRecording={isRecording}
+          onToggleRecording={isRecording ? stopVoiceRecording : startVoiceRecording}
+          onToolSelect={(tool) => {
+             // Handle tool selection activation, then potentially auto-open chat in that mode
+             if (tool === 'deep_research') setIsDeepResearch(true);
+             if (tool === 'image_gen') setIsImageGenMode(true);
+             if (tool === 'prompt_optimizer') {
+                 setIsPromptOptimizerMode(true);
+                 setTargetAI('chatgpt');
+             }
+             if (tool === 'live_api') {
+                 handleLiveToggle();
+                 return; // Live API usually takes over full screen or panel
+             }
+          }}
+        />
+      )}
+
+      {/* Main Chat Area - Hidden when meeting mode is active or Project Hub is active */}
+      {!isMeetingMode && (!currentFolderId || currentChatId) && (
       <main style={{
         flex: 1,
         overflowY: 'auto',
@@ -2056,6 +2189,75 @@ function App() {
         ))}
 
         {isLoading && !(messages[messages.length - 1]?.role === 'model' && messages[messages.length - 1]?.text) && (
+          isDeepResearch ? (
+            <div style={{
+              display: 'flex',
+              flexDirection: 'column',
+              gap: '12px',
+              padding: '16px',
+              background: 'transparent',
+              maxWidth: '85%',
+              marginLeft: '36px'
+            }}>
+                <div style={{ display: 'flex', alignItems: 'center', gap: '12px', marginBottom: '4px' }}>
+                    <div className="research-spinner" style={{
+                        width: '20px', 
+                        height: '20px', 
+                        borderRadius: '50%',
+                        border: '2px solid var(--color-accent)',
+                        borderTopColor: 'transparent',
+                    }}></div>
+                    <span style={{ fontSize: '15px', fontWeight: 600, color: '#fff' }}>Investigando</span>
+                </div>
+                
+                <div style={{ display: 'flex', flexDirection: 'column', gap: '8px', paddingLeft: '32px' }}>
+                    <div style={{ fontSize: '14px', color: 'var(--color-gray-medium)' }}>
+                        {researchStep}
+                    </div>
+                    {/* Step Indicators */}
+                    <div style={{ display: 'flex', gap: '4px', marginTop: '4px' }}>
+                        {['Buscando', 'Leyendo', 'Analizando', 'Escribiendo'].map((step, i) => {
+                             const currentStepIndex = 
+                                researchStep.includes('Buscando') || researchStep.includes('Iniciando') ? 0 : 
+                                researchStep.includes('Leyendo') ? 1 : 
+                                researchStep.includes('Analizando') ? 2 : 3;
+                             
+                             const isActive = i === currentStepIndex;
+                             const isCompleted = i < currentStepIndex;
+
+                             return (
+                                 <div key={step} style={{ 
+                                     height: '4px', 
+                                     flex: 1, 
+                                     background: isCompleted ? 'var(--color-accent)' : isActive ? 'rgba(0, 212, 179, 0.3)' : 'rgba(255,255,255,0.1)',
+                                     borderRadius: '2px',
+                                     position: 'relative',
+                                     overflow: 'hidden'
+                                 }}>
+                                    {isActive && (
+                                        <div style={{
+                                            position: 'absolute',
+                                            top: 0, left: 0, bottom: 0,
+                                            width: '50%',
+                                            background: 'var(--color-accent)',
+                                            animation: 'indeterminate 1s infinite linear'
+                                        }}/>
+                                    )}
+                                 </div>
+                             )
+                        })}
+                    </div>
+                </div>
+                <style>{`
+                    @keyframes spin { 100% { transform: rotate(360deg); } }
+                    .research-spinner { animation: spin 1s linear infinite; }
+                    @keyframes indeterminate {
+                            0% { left: -50%; }
+                            100% { left: 100%; }
+                    }
+                `}</style>
+            </div>
+          ) : (
           <div style={{ display: 'flex', gap: '8px', alignItems: 'center' }}>
             <img
               src={liaAvatar}
@@ -2075,14 +2277,15 @@ function App() {
               </div>
             </div>
           </div>
+          )
         )}
 
         <div ref={messagesEndRef} />
       </main>
       )}
 
-      {/* Input Area - Hidden when meeting mode is active */}
-      {!isMeetingMode && (
+      {/* Input Area - Hidden when meeting mode is active OR in Project Hub */}
+      {!isMeetingMode && (!currentFolderId || currentChatId) && (
       <footer style={{
         padding: '12px 16px',
         borderTop: '1px solid var(--bg-dark-secondary)',
@@ -2523,13 +2726,18 @@ function App() {
             )}
           </div>
 
-          <input
-            type="text"
+          <textarea
             value={inputValue}
-            onChange={(e) => setInputValue(e.target.value)}
+            onChange={(e) => {
+                setInputValue(e.target.value);
+                // Auto-resize
+                e.target.style.height = 'auto';
+                e.target.style.height = Math.min(e.target.scrollHeight, 150) + 'px';
+            }}
             onKeyDown={handleKeyDown}
             disabled={isLoading || isRecording}
             placeholder={isRecording ? "Escuchando..." : "Escribe un mensaje..."}
+            rows={1}
             style={{
               background: 'transparent',
               border: 'none',
@@ -2537,7 +2745,12 @@ function App() {
               flex: 1,
               outline: 'none',
               fontSize: '14px',
-              fontFamily: 'Inter, sans-serif'
+              fontFamily: 'Inter, sans-serif',
+              resize: 'none',
+              minHeight: '24px',
+              maxHeight: '150px',
+              padding: '0',
+              lineHeight: '1.5'
             }}
           />
 
@@ -2799,16 +3012,45 @@ function App() {
                 onMouseOver={(e) => e.currentTarget.style.background = 'var(--bg-dark-tertiary)'}
                 onMouseOut={(e) => e.currentTarget.style.background = 'transparent'}
               >
-                <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
-                  <path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z"></path>
-                </svg>
-                <span style={{ flex: 1 }}>{folder.name}</span>
-                <svg
-                  width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"
-                  style={{ transform: expandedFolders.has(folder.id) ? 'rotate(180deg)' : 'rotate(0deg)', transition: 'transform 0.2s' }}
+                <div 
+                   onClick={(e) => {
+                     e.stopPropagation();
+                     handleOpenProject(folder.id);
+                   }}
+                   style={{ 
+                     flex: 1, 
+                     display: 'flex', 
+                     alignItems: 'center', 
+                     gap: '8px',
+                     cursor: 'pointer' 
+                   }}
                 >
-                  <polyline points="6 9 12 15 18 9"></polyline>
-                </svg>
+                  <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+                    <path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z"></path>
+                  </svg>
+                  <span>{folder.name}</span>
+                </div>
+                
+                <div
+                   onClick={(e) => {
+                     e.stopPropagation();
+                     const newExpanded = new Set(expandedFolders);
+                     if (newExpanded.has(folder.id)) {
+                       newExpanded.delete(folder.id);
+                     } else {
+                       newExpanded.add(folder.id);
+                     }
+                     setExpandedFolders(newExpanded);
+                   }}
+                   style={{ padding: '4px', cursor: 'pointer' }}
+                >
+                  <svg
+                    width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"
+                    style={{ transform: expandedFolders.has(folder.id) ? 'rotate(180deg)' : 'rotate(0deg)', transition: 'transform 0.2s' }}
+                  >
+                    <polyline points="6 9 12 15 18 9"></polyline>
+                  </svg>
+                </div>
               </button>
 
               {/* Folder Chats */}

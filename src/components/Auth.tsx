@@ -1,17 +1,19 @@
 import React, { useState } from 'react';
 import { supabase } from '../lib/supabase';
+import { useAuth } from '../contexts/AuthContext';
 
 export default function Auth() {
+  const { signInWithSofia, usingSofia } = useAuth();
   const [loading, setLoading] = useState(false);
   const [mode, setMode] = useState<'login' | 'register'>('login');
   const [message, setMessage] = useState<{ type: 'error' | 'success', text: string } | null>(null);
 
   // Form States
-  const [email, setEmail] = useState('');
+  const [emailOrUsername, setEmailOrUsername] = useState('');
   const [confirmEmail, setConfirmEmail] = useState('');
   const [password, setPassword] = useState('');
   const [confirmPassword, setConfirmPassword] = useState('');
-  
+
   // Visibility States
   const [showPassword, setShowPassword] = useState(false);
   const [showConfirmPassword, setShowConfirmPassword] = useState(false);
@@ -19,13 +21,13 @@ export default function Auth() {
 
   // Options
   const nationalityOptions = [
-    { value: "MX", label: "México" },
+    { value: "MX", label: "Mexico" },
     { value: "AR", label: "Argentina" },
     { value: "CO", label: "Colombia" },
-    { value: "ES", label: "España" },
+    { value: "ES", label: "Espana" },
     { value: "US", label: "Estados Unidos" },
     { value: "CL", label: "Chile" },
-    { value: "PE", label: "Perú" },
+    { value: "PE", label: "Peru" },
     { value: "OTHER", label: "Otro" }
   ];
 
@@ -42,13 +44,39 @@ export default function Auth() {
     setMessage(null);
 
     try {
-      if (mode === 'register') {
-        if (email !== confirmEmail) throw new Error("Los correos no coinciden.");
-        if (password !== confirmPassword) throw new Error("Las contraseñas no coinciden.");
-        if (password.length < 6) throw new Error("La contraseña es muy corta (min 6).");
+      if (mode === 'login') {
+        // LOGIN: Usar SOFIA si esta configurado
+        if (usingSofia) {
+          const result = await signInWithSofia(emailOrUsername, password);
+          if (!result.success) {
+            throw new Error(result.error || 'Error al iniciar sesion con SOFIA');
+          }
+          // Success - AuthContext handles the state
+        } else {
+          // Fallback: usar Lia Supabase directamente
+          const { error } = await supabase.auth.signInWithPassword({
+            email: emailOrUsername,
+            password,
+          });
+          if (error) throw error;
+        }
+      } else {
+        // REGISTER: Por ahora solo en Lia (o redirigir a SOFIA)
+        if (usingSofia) {
+          setMessage({
+            type: 'error',
+            text: 'Para crear una cuenta, registrate en SOFIA primero.'
+          });
+          setLoading(false);
+          return;
+        }
+
+        if (emailOrUsername !== confirmEmail) throw new Error("Los correos no coinciden.");
+        if (password !== confirmPassword) throw new Error("Las contrasenas no coinciden.");
+        if (password.length < 6) throw new Error("La contrasena es muy corta (min 6).");
 
         const { error } = await supabase.auth.signUp({
-          email,
+          email: emailOrUsername,
           password,
           options: {
             data: {
@@ -62,14 +90,8 @@ export default function Auth() {
           }
         });
         if (error) throw error;
-        setMessage({ type: 'success', text: '¡Cuenta creada! Revisa tu correo.' });
+        setMessage({ type: 'success', text: 'Cuenta creada! Revisa tu correo.' });
         setMode('login');
-      } else {
-        const { error } = await supabase.auth.signInWithPassword({
-          email,
-          password,
-        });
-        if (error) throw error;
       }
     } catch (error: any) {
       setMessage({ type: 'error', text: error.message || error.error_description });
@@ -86,6 +108,13 @@ export default function Auth() {
     <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M17.94 17.94A10.07 10.07 0 0 1 12 20c-7 0-11-8-11-8a18.45 18.45 0 0 1 5.06-5.94M9.9 4.24A9.12 9.12 0 0 1 12 4c7 0 11 8 11 8a18.5 18.5 0 0 1-2.16 3.19m-6.72-1.07a3 3 0 1 1-4.24-4.24"></path><line x1="1" y1="1" x2="23" y2="23"></line></svg>
   );
 
+  const SofiaLogo = () => (
+    <svg width="20" height="20" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg">
+      <circle cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="2"/>
+      <path d="M8 12L11 15L16 9" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"/>
+    </svg>
+  );
+
   return (
     <div style={{
       display: 'flex',
@@ -93,17 +122,17 @@ export default function Auth() {
       alignItems: 'center',
       justifyContent: 'center',
       minHeight: '100vh',
-      backgroundColor: '#0F1419', // Fondo Principal Oscuro (Sofia Design)
+      backgroundColor: '#0F1419',
       color: '#ffffff',
       padding: '32px 16px',
       fontFamily: "'Inter', sans-serif"
     }}>
-      
+
       {/* Logo */}
       <div style={{ position: 'relative', marginBottom: '24px' }}>
          <div style={{
           position: 'absolute', top: '50%', left: '50%', transform: 'translate(-50%, -50%)',
-          width: '70px', height: '70px', background: 'radial-gradient(circle, rgba(0, 212, 179, 0.4) 0%, transparent 70%)', // Aqua Glow
+          width: '70px', height: '70px', background: 'radial-gradient(circle, rgba(0, 212, 179, 0.4) 0%, transparent 70%)',
           filter: 'blur(15px)', zIndex: 0
         }} />
         <img src="/assets/Icono.png" alt="Lia" style={{ width: '64px', height: '64px', position: 'relative', zIndex: 1, filter: 'drop-shadow(0 4px 12px rgba(0,0,0,0.3))' }} />
@@ -114,13 +143,34 @@ export default function Auth() {
           {mode === 'login' ? 'Bienvenido a Lia' : 'Crear cuenta'}
         </h1>
         <p style={{ fontSize: '13px', color: '#94a3b8' }}>
-          {mode === 'login' ? 'Accede a tu asistente personal' : 'Únete para potenciar tu productividad'}
+          {mode === 'login'
+            ? (usingSofia ? 'Inicia sesion con tu cuenta de SOFIA' : 'Accede a tu asistente personal')
+            : 'Unete para potenciar tu productividad'}
         </p>
       </div>
 
+      {/* SOFIA Badge when configured */}
+      {usingSofia && mode === 'login' && (
+        <div style={{
+          display: 'flex',
+          alignItems: 'center',
+          gap: '8px',
+          padding: '8px 16px',
+          background: 'rgba(0, 212, 179, 0.1)',
+          border: '1px solid rgba(0, 212, 179, 0.3)',
+          borderRadius: '20px',
+          marginBottom: '16px',
+          fontSize: '12px',
+          color: '#00D4B3'
+        }}>
+          <SofiaLogo />
+          <span>Conectado con SOFIA</span>
+        </div>
+      )}
+
       <form onSubmit={handleAuth} style={{ width: '100%', maxWidth: '340px', display: 'flex', flexDirection: 'column', gap: '12px' }}>
-        
-        {mode === 'register' && (
+
+        {mode === 'register' && !usingSofia && (
           <>
              <div className="input-group">
                 <input type="text" placeholder="Nombre(s)" value={firstName} onChange={e => setFirstName(e.target.value)} required style={inputStyle} />
@@ -130,8 +180,8 @@ export default function Auth() {
                 <input type="text" placeholder="Apellido M." value={lastNameM} onChange={e => setLastNameM(e.target.value)} required style={inputStyle} />
              </div>
              <div style={{ display: 'flex', gap: '8px' }}>
-                <input type="tel" placeholder="Teléfono" value={phone} onChange={e => setPhone(e.target.value)} required style={inputStyle} />
-                
+                <input type="tel" placeholder="Telefono" value={phone} onChange={e => setPhone(e.target.value)} required style={inputStyle} />
+
                 {/* Custom Dropdown for Nationality */}
                 <div style={{ position: 'relative', width: '100%' }}>
                   <button
@@ -147,20 +197,19 @@ export default function Auth() {
                       color: nationality ? 'white' : '#94a3b8'
                     }}
                   >
-                    {nationality ? nationalityOptions.find(o => o.value === nationality)?.label : 'País'}
+                    {nationality ? nationalityOptions.find(o => o.value === nationality)?.label : 'Pais'}
                     <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" style={{ transform: showNationalityDropdown ? 'rotate(180deg)' : 'rotate(0deg)', transition: 'transform 0.2s' }}>
                       <polyline points="6 9 12 15 18 9"></polyline>
                     </svg>
                   </button>
-                  
+
                   {showNationalityDropdown && (
                     <>
-                      {/* Backdrop invisible para cerrar al hacer clic fuera */}
-                      <div 
-                        style={{ position: 'fixed', inset: 0, zIndex: 10 }} 
+                      <div
+                        style={{ position: 'fixed', inset: 0, zIndex: 10 }}
                         onClick={() => setShowNationalityDropdown(false)}
                       />
-                      
+
                       <div style={{
                         position: 'absolute',
                         top: 'calc(100% + 4px)',
@@ -187,7 +236,7 @@ export default function Auth() {
                               fontSize: '13px',
                               cursor: 'pointer',
                               borderBottom: '1px solid rgba(255,255,255,0.03)',
-                              color: nationality === option.value ? '#00D4B3' : 'white', // Aqua selected
+                              color: nationality === option.value ? '#00D4B3' : 'white',
                               background: nationality === option.value ? 'rgba(0, 212, 179, 0.1)' : 'transparent',
                               transition: 'background 0.2s'
                             }}
@@ -210,12 +259,19 @@ export default function Auth() {
           </>
         )}
 
-        {/* Email */}
+        {/* Email or Username */}
         <div className="input-group">
-           <input type="email" placeholder="Correo electrónico" value={email} onChange={e => setEmail(e.target.value)} required style={inputStyle} />
+           <input
+             type="text"
+             placeholder={usingSofia ? "Usuario o correo electronico" : "Correo electronico"}
+             value={emailOrUsername}
+             onChange={e => setEmailOrUsername(e.target.value)}
+             required
+             style={inputStyle}
+           />
         </div>
-        
-        {mode === 'register' && (
+
+        {mode === 'register' && !usingSofia && (
            <div className="input-group">
               <input type="email" placeholder="Confirmar correo" value={confirmEmail} onChange={e => setConfirmEmail(e.target.value)} required onPaste={e => e.preventDefault()} style={inputStyle} />
            </div>
@@ -223,13 +279,13 @@ export default function Auth() {
 
         {/* Password */}
         <div style={{ position: 'relative' }}>
-          <input 
-            type={showPassword ? "text" : "password"} 
-            placeholder="Contraseña" 
-            value={password} 
-            onChange={e => setPassword(e.target.value)} 
-            required 
-            style={{...inputStyle, paddingRight: '36px'}} 
+          <input
+            type={showPassword ? "text" : "password"}
+            placeholder="Contrasena"
+            value={password}
+            onChange={e => setPassword(e.target.value)}
+            required
+            style={{...inputStyle, paddingRight: '36px'}}
           />
           <button
             type="button"
@@ -240,15 +296,15 @@ export default function Auth() {
           </button>
         </div>
 
-        {mode === 'register' && (
+        {mode === 'register' && !usingSofia && (
             <div style={{ position: 'relative' }}>
-              <input 
-                type={showConfirmPassword ? "text" : "password"} 
-                placeholder="Confirmar contraseña" 
-                value={confirmPassword} 
-                onChange={e => setConfirmPassword(e.target.value)} 
-                required 
-                style={{...inputStyle, paddingRight: '36px'}} 
+              <input
+                type={showConfirmPassword ? "text" : "password"}
+                placeholder="Confirmar contrasena"
+                value={confirmPassword}
+                onChange={e => setConfirmPassword(e.target.value)}
+                required
+                style={{...inputStyle, paddingRight: '36px'}}
               />
               <button
                 type="button"
@@ -261,7 +317,7 @@ export default function Auth() {
         )}
 
         {message && (
-          <div style={{ 
+          <div style={{
             padding: '10px', borderRadius: '8px', fontSize: '12px', textAlign: 'center',
             backgroundColor: message.type === 'error' ? 'rgba(239, 68, 68, 0.1)' : 'rgba(16, 185, 129, 0.1)',
             color: message.type === 'error' ? '#fca5a5' : '#6ee7b7',
@@ -276,42 +332,61 @@ export default function Auth() {
           disabled={loading}
           style={{
             marginTop: '12px',
-            background: 'linear-gradient(135deg, #00D4B3 0%, #00a88d 100%)', // SOFIA AQUA / GREEN
-            color: '#0A2540', // Dark text on bright button for contrast
+            background: 'linear-gradient(135deg, #00D4B3 0%, #00a88d 100%)',
+            color: '#0A2540',
             border: 'none',
             padding: '12px',
             borderRadius: '12px',
             fontWeight: '700',
             fontSize: '14px',
             cursor: loading ? 'wait' : 'pointer',
-            boxShadow: '0 4px 15px rgba(0, 212, 179, 0.3)', // Aqua Glow
+            boxShadow: '0 4px 15px rgba(0, 212, 179, 0.3)',
             opacity: loading ? 0.7 : 1,
             transition: 'transform 0.1s, box-shadow 0.2s',
+            display: 'flex',
+            alignItems: 'center',
+            justifyContent: 'center',
+            gap: '8px'
           }}
           onMouseOver={e => !loading && (e.currentTarget.style.transform = 'translateY(-1px)')}
           onMouseOut={e => !loading && (e.currentTarget.style.transform = 'translateY(0)')}
         >
-          {loading ? 'Procesando...' : (mode === 'login' ? 'Entrar' : 'Registrarse')}
+          {usingSofia && mode === 'login' && <SofiaLogo />}
+          {loading ? 'Procesando...' : (mode === 'login' ? (usingSofia ? 'Entrar con SOFIA' : 'Entrar') : 'Registrarse')}
         </button>
 
       </form>
 
-      <div style={{ marginTop: '24px', fontSize: '13px', color: '#94a3b8' }}>
-        <span>{mode === 'login' ? '¿No tienes cuenta?' : '¿Ya tienes cuenta?'}</span>
-        <button
-          onClick={() => { setMode(mode === 'login' ? 'register' : 'login'); setMessage(null); }}
-          style={{ background: 'none', border: 'none', color: '#00D4B3', fontWeight: '600', cursor: 'pointer', marginLeft: '6px' }}
-        >
-          {mode === 'login' ? 'Regístrate' : 'Inicia Sesión'}
-        </button>
-      </div>
+      {/* Toggle login/register */}
+      {!usingSofia && (
+        <div style={{ marginTop: '24px', fontSize: '13px', color: '#94a3b8' }}>
+          <span>{mode === 'login' ? 'No tienes cuenta?' : 'Ya tienes cuenta?'}</span>
+          <button
+            onClick={() => { setMode(mode === 'login' ? 'register' : 'login'); setMessage(null); }}
+            style={{ background: 'none', border: 'none', color: '#00D4B3', fontWeight: '600', cursor: 'pointer', marginLeft: '6px' }}
+          >
+            {mode === 'login' ? 'Registrate' : 'Inicia Sesion'}
+          </button>
+        </div>
+      )}
+
+      {/* SOFIA users: link to register in SOFIA */}
+      {usingSofia && (
+        <div style={{ marginTop: '24px', fontSize: '13px', color: '#94a3b8', textAlign: 'center' }}>
+          <span>No tienes cuenta?</span>
+          <br />
+          <span style={{ color: '#64748b', fontSize: '12px' }}>
+            Registrate en SOFIA para acceder a Lia
+          </span>
+        </div>
+      )}
     </div>
   );
 }
 
 const inputStyle = {
   width: '100%',
-  background: '#1E2329', // Fondo Secundario Oscuro
+  background: '#1E2329',
   border: '1px solid rgba(255, 255, 255, 0.1)',
   padding: '12px 14px',
   borderRadius: '10px',
