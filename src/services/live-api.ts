@@ -1,5 +1,6 @@
 
 import { GOOGLE_API_KEY, LIVE_API_URL, MODELS } from "../config";
+import { getApiKeyWithCache } from "./api-keys";
 
 export interface LiveCallbacks {
   onTextResponse: (text: string) => void;
@@ -101,12 +102,18 @@ export class LiveClient {
   }
 
   async connect(): Promise<void> {
+    // Get API key from database or fallback to env
+    let apiKey = await getApiKeyWithCache('google');
+    if (!apiKey) {
+      apiKey = GOOGLE_API_KEY;
+    }
+
     return new Promise((resolve, reject) => {
       try {
         console.log("Live API: Checking configuration...");
 
-        if (!GOOGLE_API_KEY) {
-          const error = new Error('API key de Google no configurada. Verifica tu archivo .env');
+        if (!apiKey) {
+          const error = new Error('API key de Google no configurada. Configúrala en Ajustes.');
           console.error("Live API:", error.message);
           reject(error);
           return;
@@ -119,7 +126,7 @@ export class LiveClient {
           return;
         }
 
-        const url = `${LIVE_API_URL}?key=${GOOGLE_API_KEY}`;
+        const url = `${LIVE_API_URL}?key=${apiKey}`;
         console.log("Live API: Connecting to WebSocket...");
         console.log("Live API: Model:", MODELS.LIVE);
         console.log("Live API: URL:", LIVE_API_URL);

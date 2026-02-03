@@ -10,8 +10,47 @@ import {
   getImageGenerationPrompt,
   needsComputerUse
 } from "../prompts";
+import { getApiKeyWithCache } from "./api-keys";
 
-const genAI = new GoogleGenerativeAI(GOOGLE_API_KEY);
+// Lazy initialization for GoogleGenerativeAI
+// This allows us to fetch the API key from database when needed
+let genAI: GoogleGenerativeAI | null = null;
+let currentApiKey: string | null = null;
+
+/**
+ * Gets or creates a GoogleGenerativeAI instance with the current API key
+ * Fetches from database (with cache) if available, falls back to env variable
+ */
+async function getGenAI(): Promise<GoogleGenerativeAI> {
+  try {
+    // Try to get API key from database (user's key or system default)
+    const dbApiKey = await getApiKeyWithCache('google');
+
+    if (dbApiKey) {
+      // If we have a new key or no instance yet, create/recreate
+      if (!genAI || currentApiKey !== dbApiKey) {
+        genAI = new GoogleGenerativeAI(dbApiKey);
+        currentApiKey = dbApiKey;
+        console.log('🔑 Using API key from database');
+      }
+      return genAI;
+    }
+  } catch (error) {
+    console.warn('Could not fetch API key from database, using fallback:', error);
+  }
+
+  // Fallback to environment variable
+  if (!genAI || currentApiKey !== GOOGLE_API_KEY) {
+    if (!GOOGLE_API_KEY) {
+      throw new Error('No API key available. Please configure your Google API key in settings.');
+    }
+    genAI = new GoogleGenerativeAI(GOOGLE_API_KEY);
+    currentApiKey = GOOGLE_API_KEY;
+    console.log('🔑 Using API key from environment');
+  }
+
+  return genAI;
+}
 
 // Gemini 3 no soporta googleSearch + functionDeclarations juntos (error 400)
 // Solo Google Search como tool para los modelos primario y deep research
@@ -19,31 +58,35 @@ const searchTools: any[] = [
   { googleSearch: {} },
 ];
 
+// Model getter functions (lazy initialization)
+async function getPrimaryModel() {
+  const ai = await getGenAI();
+  return ai.getGenerativeModel({
+    model: MODELS.PRIMARY,
+    tools: searchTools,
+  });
+}
 
-// Model Instances
-const primaryModel = genAI.getGenerativeModel({
-  model: MODELS.PRIMARY,
-  tools: searchTools,
-});
+async function getComputerUseModel() {
+  const ai = await getGenAI();
+  return ai.getGenerativeModel({
+    model: MODELS.COMPUTER_USE,
+  });
+}
 
-// Computer Use Model - para acciones en página (sin Google Search para evitar conflictos)
-const computerUseModel = genAI.getGenerativeModel({
-  model: MODELS.COMPUTER_USE,
-});
+async function getImageGenerationModel() {
+  const ai = await getGenAI();
+  return ai.getGenerativeModel({
+    model: MODELS.IMAGE_GENERATION,
+  });
+}
 
-
-// Image Generation Model - just get the model without special config
-const imageGenerationModel = genAI.getGenerativeModel({ 
-  model: MODELS.IMAGE_GENERATION,
-});
-
-// Deep Research uses Interactions API (not standard generateContent)
-// Model ID defined in config.ts: MODELS.DEEP_RESEARCH
-
-// PRO Model for Prompt Engineering
-const proModel = genAI.getGenerativeModel({
-  model: (MODELS as any).PRO || "gemini-2.5-pro",
-});
+async function getProModel() {
+  const ai = await getGenAI();
+  return ai.getGenerativeModel({
+    model: (MODELS as any).PRO || "gemini-2.5-pro",
+  });
+}
 
 let chatSession: any = null;
 
@@ -55,9 +98,18 @@ export const runDeepResearch = async (prompt: string) => {
     console.log("🔬 Starting Deep Research with prompt:", prompt);
     console.log("📚 Agent:", MODELS.DEEP_RESEARCH);
 
+    // Get API key from database or fallback to env
+    let apiKey = await getApiKeyWithCache('google');
+    if (!apiKey) {
+      apiKey = GOOGLE_API_KEY;
+    }
+    if (!apiKey) {
+      throw new Error('No API key available for Deep Research');
+    }
+
     // Import the new Google GenAI SDK (required for Interactions API)
     const { GoogleGenAI } = await import('@google/genai');
-    const client = new GoogleGenAI({ apiKey: GOOGLE_API_KEY });
+    const client = new GoogleGenAI({ apiKey });
 
     // Step 1: Create the research interaction
     console.log("📤 Creating interaction...");
@@ -211,10 +263,11 @@ ${prompt}
 
 Responde de forma estructurada y completa, citando fuentes cuando sea posible.`;
 
-  const searchTools: any[] = [{ googleSearch: {} }];
-  const researchModel = genAI.getGenerativeModel({
+  const localSearchTools: any[] = [{ googleSearch: {} }];
+  const ai = await getGenAI();
+  const researchModel = ai.getGenerativeModel({
     model: MODELS.FALLBACK,
-    tools: searchTools,
+    tools: localSearchTools,
   });
 
   const result = await researchModel.generateContentStream(researchPrompt);
@@ -250,9 +303,10 @@ export const generateImage = async (prompt: string): Promise<{ text: string; ima
     console.log("Generating image with prompt:", prompt);
 
     const enhancedPrompt = getImageGenerationPrompt(prompt);
-    
+    const imageModel = await getImageGenerationModel();
+
     // Use generateContent with responseModalities in the request
-    const result = await (imageGenerationModel as any).generateContent({
+    const result = await (imageModel as any).generateContent({
       contents: [{ role: "user", parts: [{ text: enhancedPrompt }] }],
       generationConfig: {
         responseModalities: ["TEXT", "IMAGE"],
@@ -288,8 +342,9 @@ export const generateImage = async (prompt: string): Promise<{ text: string; ima
   }
 };
 
-export const startChatSession = (history: any[] = []) => {
-  chatSession = primaryModel.startChat({
+export const startChatSession = async (history: any[] = []) => {
+  const model = await getPrimaryModel();
+  chatSession = model.startChat({
     history: history,
     generationConfig: {
       maxOutputTokens: 16384,
@@ -563,9 +618,10 @@ export async function sendMessageStream(
   }
 
   // Initialize specific model instance dynamically
+  const ai = await getGenAI();
   const activeModelInstance = useComputerUse
-    ? computerUseModel
-    : genAI.getGenerativeModel({
+    ? await getComputerUseModel()
+    : ai.getGenerativeModel({
         model: activeModelId,
         tools: searchTools, // Assuming primary/chosen model supports search
         systemInstruction: systemInstruction
@@ -617,7 +673,7 @@ export async function sendMessageStream(
       if (useComputerUse) throw primaryError; // No fallback for computer use
 
       const history = await chatSession.getHistory();
-      const fallbackInstance = genAI.getGenerativeModel({
+      const fallbackInstance = ai.getGenerativeModel({
         model: fallbackId,
         systemInstruction: systemInstruction
       });
@@ -712,8 +768,9 @@ export const runMapsQuery = async (
 
     // Crear modelo con Maps Grounding
     // Usamos gemini-2.0-flash para mejor soporte de JSON + Tools
-    const mapsModel = genAI.getGenerativeModel({
-      model: "gemini-2.5-flash", 
+    const ai = await getGenAI();
+    const mapsModel = ai.getGenerativeModel({
+      model: "gemini-2.5-flash",
     });
 
     // Construir prompt para JSON
@@ -842,12 +899,13 @@ export const optimizePrompt = async (originalPrompt: string, targetAI: 'chatgpt'
   const systemInstruction = PROMPT_OPTIMIZER[targetAI];
 
   try {
+    const proModel = await getProModel();
     const result = await proModel.generateContent({
       contents: [
         { role: "user", parts: [{ text: `${systemInstruction}\n\nPROMPT ORIGINAL (A optimizar):\n"${originalPrompt}"\n\nGenera SOLAMENTE el prompt optimizado final:` }] }
       ]
     });
-    
+
     return result.response.text();
   } catch (error) {
     console.error("Error optimizing prompt:", error);
@@ -858,6 +916,7 @@ export const optimizePrompt = async (originalPrompt: string, targetAI: 'chatgpt'
 export const transcribeAudio = async (base64Audio: string): Promise<string> => {
   try {
     // Usamos el modelo primario que debe ser capaz de multimodalidad (Gemini 1.5/2.0 Flash)
+    const primaryModel = await getPrimaryModel();
     const result = await primaryModel.generateContent({
       contents: [{
         role: "user",

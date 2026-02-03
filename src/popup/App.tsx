@@ -2777,7 +2777,7 @@ function App() {
                 boxShadow: 'var(--shadow-modal)',
                 zIndex: 1000
               }}>
-                {/* Deep Research */}
+                {/* Deep Research - TEMPORALMENTE OCULTO
                 <button
                   onClick={() => {
                     setIsDeepResearch(!isDeepResearch);
@@ -2816,7 +2816,8 @@ function App() {
                     </svg>
                   )}
                 </button>
-                
+                */}
+
                 {/* Live API */}
                 <button
                   onClick={() => {

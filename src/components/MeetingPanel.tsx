@@ -8,6 +8,8 @@ import { MeetingManager, MeetingStatus, TranscriptSegmentLocal, MeetingCallbacks
 import { MeetingSession, TranscriptSegment } from '../services/meeting-storage';
 import { PDFExportService } from '../services/pdf-export';
 import { meetingStorage } from '../services/meeting-storage';
+import { getApiKeyWithCache } from '../services/api-keys';
+import { GOOGLE_API_KEY } from '../config';
 
 interface MeetingPanelProps {
   userId: string;
@@ -689,7 +691,14 @@ export const MeetingPanel: React.FC<MeetingPanelProps> = ({ userId, onClose }) =
           .join('\n');
 
         const { GoogleGenerativeAI } = await import('@google/generative-ai');
-        const apiKey = import.meta.env.VITE_GOOGLE_API_KEY;
+        // Get API key from database or fallback to env
+        let apiKey = await getApiKeyWithCache('google');
+        if (!apiKey) {
+          apiKey = GOOGLE_API_KEY;
+        }
+        if (!apiKey) {
+          throw new Error('No API key configured');
+        }
         const genAI = new GoogleGenerativeAI(apiKey);
         const model = genAI.getGenerativeModel({ model: 'gemini-2.5-flash' });
 

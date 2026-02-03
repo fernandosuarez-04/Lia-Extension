@@ -1,4 +1,5 @@
 import React, { useState, useEffect, useRef } from 'react';
+import { getUserApiKey, saveUserApiKey, deleteUserApiKey, validateApiKey, invalidateApiKeyCache } from '../services/api-keys';
 
 interface SettingsModalProps {
     isOpen: boolean;
@@ -135,49 +136,49 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({ isOpen, onClose, u
         }
     }, [isOpen, user]);
 
-    // Load API key from chrome.storage (never stored in Supabase)
+    // Load API key from Supabase database
     const loadApiKey = async () => {
-        if (typeof chrome !== 'undefined' && chrome.storage) {
-            chrome.storage.local.get(['lia_user_google_api_key'], (result) => {
-                if (result.lia_user_google_api_key) {
-                    setUserApiKey(result.lia_user_google_api_key);
-                    setApiKeyStatus('saved');
-                }
-            });
+        try {
+            const userKey = await getUserApiKey('google');
+            if (userKey) {
+                setUserApiKey(userKey.api_key);
+                setApiKeyStatus('saved');
+            }
+        } catch (error) {
+            console.error('Error loading API key:', error);
         }
     };
 
-    // Test API key validity
-    const testApiKey = async (key: string) => {
-        if (!key || key.length < 10) {
+    // Save API key to Supabase database
+    const saveApiKey = async () => {
+        const key = userApiKey.trim();
+        if (!key) {
+            // If empty, delete the key
+            const result = await deleteUserApiKey('google');
+            if (result.success) {
+                invalidateApiKeyCache();
+                setApiKeyStatus('none');
+            }
+            return;
+        }
+
+        setApiKeyStatus('testing');
+
+        // First validate the key
+        const isValid = await validateApiKey(key, 'google');
+        if (!isValid) {
             setApiKeyStatus('invalid');
             return;
         }
-        setApiKeyStatus('testing');
-        try {
-            const response = await fetch(
-                `https://generativelanguage.googleapis.com/v1beta/models?key=${key}`
-            );
-            if (response.ok) {
-                setApiKeyStatus('valid');
-            } else {
-                setApiKeyStatus('invalid');
-            }
-        } catch {
-            setApiKeyStatus('invalid');
-        }
-    };
 
-    // Save API key to chrome.storage
-    const saveApiKey = () => {
-        if (typeof chrome !== 'undefined' && chrome.storage) {
-            if (userApiKey.trim()) {
-                chrome.storage.local.set({ lia_user_google_api_key: userApiKey.trim() });
-                testApiKey(userApiKey.trim());
-            } else {
-                chrome.storage.local.remove('lia_user_google_api_key');
-                setApiKeyStatus('none');
-            }
+        // Save to database
+        const result = await saveUserApiKey({ provider: 'google', api_key: key });
+        if (result.success) {
+            invalidateApiKeyCache();
+            setApiKeyStatus('valid');
+        } else {
+            console.error('Error saving API key:', result.error);
+            setApiKeyStatus('invalid');
         }
     };
 
@@ -472,8 +473,8 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({ isOpen, onClose, u
                                             Seguridad de API Keys
                                         </div>
                                         <div style={{ fontSize: '12px', color: 'var(--color-gray-medium)', lineHeight: 1.5 }}>
-                                            Tu API key se guarda localmente en tu navegador y nunca se envía a nuestros servidores.
-                                            Solo se usa para comunicarse directamente con Google Gemini.
+                                            Tu API key se guarda de forma segura en tu cuenta de SOFLIA.
+                                            Solo tú puedes ver y usar tu propia API key.
                                         </div>
                                     </div>
                                 </div>
@@ -608,12 +609,13 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({ isOpen, onClose, u
                                 {userApiKey && (
                                     <div style={{ marginBottom: '24px' }}>
                                         <button
-                                            onClick={() => {
-                                                setUserApiKey('');
-                                                if (typeof chrome !== 'undefined' && chrome.storage) {
-                                                    chrome.storage.local.remove('lia_user_google_api_key');
+                                            onClick={async () => {
+                                                const result = await deleteUserApiKey('google');
+                                                if (result.success) {
+                                                    setUserApiKey('');
+                                                    invalidateApiKeyCache();
+                                                    setApiKeyStatus('none');
                                                 }
-                                                setApiKeyStatus('none');
                                             }}
                                             style={{
                                                 padding: '10px 16px',

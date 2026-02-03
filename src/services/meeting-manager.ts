@@ -9,7 +9,8 @@ import { meetingStorage, MeetingSession } from './meeting-storage';
 import { SpeechToTextService, TranscriptionResult } from './speech-to-text';
 import { WhisperTranscriptionService, WhisperTranscriptionResult } from './whisper-transcription';
 import { GeminiTranscriptionService, GeminiTranscriptionResult } from './gemini-transcription';
-import { MODELS, LIVE_API_URL } from '../config';
+import { MODELS, LIVE_API_URL, GOOGLE_API_KEY } from '../config';
+import { getApiKeyWithCache } from './api-keys';
 
 // Types
 export type MeetingPlatform = 'google-meet' | 'zoom';
@@ -194,7 +195,11 @@ export class MeetingManager {
 
       // Initialize Gemini transcription service (RECOMMENDED - uses existing API key)
       if (this.useGeminiTranscription) {
-        const googleKey = import.meta.env.VITE_GOOGLE_API_KEY;
+        // Get API key from database or fallback to env
+        let googleKey = await getApiKeyWithCache('google');
+        if (!googleKey) {
+          googleKey = GOOGLE_API_KEY;
+        }
         if (googleKey) {
           this.geminiTranscription = new GeminiTranscriptionService(googleKey, {
             language: 'español'
@@ -246,8 +251,12 @@ export class MeetingManager {
 
       // Initialize Speech-to-Text service (if nothing else available)
       if (!this.useGeminiTranscription && !this.useWhisper && this.useSpeechToText) {
-        const apiKey = import.meta.env.VITE_GOOGLE_API_KEY;
-        this.speechToText = new SpeechToTextService(apiKey, {
+        // Get API key from database or fallback to env
+        let sttApiKey = await getApiKeyWithCache('google');
+        if (!sttApiKey) {
+          sttApiKey = GOOGLE_API_KEY;
+        }
+        this.speechToText = new SpeechToTextService(sttApiKey || '', {
           languageCode: 'es-MX',
           enableSpeakerDiarization: true,
           minSpeakerCount: 2,
@@ -474,8 +483,15 @@ export class MeetingManager {
 
     // Use Gemini to generate summary
     const { GoogleGenerativeAI } = await import('@google/generative-ai');
-    const apiKey = import.meta.env.VITE_GOOGLE_API_KEY;
-    const genAI = new GoogleGenerativeAI(apiKey);
+    // Get API key from database or fallback to env
+    let summaryApiKey = await getApiKeyWithCache('google');
+    if (!summaryApiKey) {
+      summaryApiKey = GOOGLE_API_KEY;
+    }
+    if (!summaryApiKey) {
+      return 'No API key configured for generating summary.';
+    }
+    const genAI = new GoogleGenerativeAI(summaryApiKey);
     const model = genAI.getGenerativeModel({ model: MODELS.PRIMARY });
 
     const summaryPrompts: Record<string, string> = {
@@ -507,7 +523,11 @@ Formato: [ ] Responsable: Tarea`,
   // ==================== PRIVATE METHODS ====================
 
   private async connectLiveAPI(): Promise<void> {
-    const apiKey = import.meta.env.VITE_GOOGLE_API_KEY;
+    // Get API key from database or fallback to env
+    let apiKey = await getApiKeyWithCache('google');
+    if (!apiKey) {
+      apiKey = GOOGLE_API_KEY;
+    }
 
     if (!apiKey) {
       throw new Error('Google API key not configured');
@@ -1117,8 +1137,16 @@ Formato: [ ] Responsable: Tarea`,
 
       // Use Gemini to clean up the text
       const { GoogleGenerativeAI } = await import('@google/generative-ai');
-      const apiKey = import.meta.env.VITE_GOOGLE_API_KEY;
-      const genAI = new GoogleGenerativeAI(apiKey);
+      // Get API key from database or fallback to env
+      let cleanupApiKey = await getApiKeyWithCache('google');
+      if (!cleanupApiKey) {
+        cleanupApiKey = GOOGLE_API_KEY;
+      }
+      if (!cleanupApiKey) {
+        console.warn('No API key available for text cleanup');
+        return;
+      }
+      const genAI = new GoogleGenerativeAI(cleanupApiKey);
       const model = genAI.getGenerativeModel({ model: MODELS.PRIMARY });
 
       const prompt = `Corrige SOLO los errores de transcripción en el siguiente texto.
