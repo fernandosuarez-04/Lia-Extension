@@ -932,3 +932,38 @@ export const transcribeAudio = async (base64Audio: string): Promise<string> => {
     throw error;
   }
 };
+
+// Legacy GeminiService class for sidepanel compatibility
+export class GeminiService {
+  private genAI: GoogleGenerativeAI;
+  private chatSession: any = null;
+
+  constructor(apiKey: string) {
+    this.genAI = new GoogleGenerativeAI(apiKey);
+  }
+
+  async chat(prompt: string, history: Array<{ role: string; parts: string }>): Promise<string> {
+    try {
+      const model = this.genAI.getGenerativeModel({ model: MODELS.PRIMARY });
+
+      // Convert history to Gemini format
+      const formattedHistory = history.map(msg => ({
+        role: msg.role === 'assistant' ? 'model' : msg.role,
+        parts: [{ text: msg.parts }]
+      }));
+
+      if (!this.chatSession) {
+        this.chatSession = model.startChat({
+          history: formattedHistory,
+          generationConfig: { maxOutputTokens: 8192 }
+        });
+      }
+
+      const result = await this.chatSession.sendMessage(prompt);
+      return result.response.text();
+    } catch (error) {
+      console.error("GeminiService chat error:", error);
+      throw error;
+    }
+  }
+}

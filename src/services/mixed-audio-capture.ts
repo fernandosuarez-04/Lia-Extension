@@ -26,8 +26,68 @@ export class MixedAudioCapture {
   private tabGainNode: GainNode | null = null;
 
   /**
+   * Start capturing tab audio via chrome.tabCapture — no dialog shown to user.
+   * Requires background service worker to call getMediaStreamId (already implemented).
+   * Falls back to startWithTabSelection if this fails.
+   */
+  async startWithTabCapture(
+    tabId: number,
+    callbacks: MixedAudioCallbacks,
+    options?: { includeMicrophone?: boolean }
+  ): Promise<void> {
+    if (this.isCapturing) {
+      console.warn('MixedAudioCapture: Already capturing');
+      return;
+    }
+
+    this.callbacks = callbacks;
+
+    try {
+      console.log('MixedAudioCapture: Requesting tab audio via chrome.tabCapture...');
+
+      // Ask background service worker for the stream ID
+      const response: { streamId?: string; error?: string } = await new Promise((resolve, reject) => {
+        chrome.runtime.sendMessage(
+          { type: 'GET_TAB_CAPTURE_STREAM_ID', tabId },
+          (res) => {
+            if (chrome.runtime.lastError) {
+              reject(new Error(chrome.runtime.lastError.message));
+            } else {
+              resolve(res || {});
+            }
+          }
+        );
+      });
+
+      if (!response.streamId) {
+        throw new Error(response.error || 'No stream ID from tabCapture');
+      }
+
+      // Create MediaStream from the stream ID using getUserMedia
+      const stream = await navigator.mediaDevices.getUserMedia({
+        audio: {
+          mandatory: {
+            chromeMediaSource: 'tab',
+            chromeMediaSourceId: response.streamId
+          }
+        },
+        video: false
+      } as any);
+
+      this.tabStream = stream;
+      console.log('MixedAudioCapture: Tab audio obtained via chrome.tabCapture (no dialog)');
+
+      await this.setupAudioProcessing(options);
+    } catch (error) {
+      console.error('MixedAudioCapture: tabCapture failed, will fall back to getDisplayMedia', error);
+      this.callbacks?.onError(error instanceof Error ? error : new Error(String(error)));
+      throw error;
+    }
+  }
+
+  /**
    * Start capturing by prompting user to select a tab (Manifest V3 compatible)
-   * Uses getDisplayMedia which is more reliable than tabCapture in MV3
+   * Uses getDisplayMedia — shows a picker dialog.
    */
   async startWithTabSelection(
     _tabId: number,

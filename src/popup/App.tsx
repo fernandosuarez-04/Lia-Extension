@@ -407,14 +407,14 @@ function App() {
         .limit(50);
 
       if (conversations && conversations.length > 0) {
-        const sessionsPromises = conversations.map(async (conv) => {
+        const sessionsPromises = conversations.map(async (conv: { id: string; title: string; created_at: string; updated_at: string; folder_id?: string | null }) => {
           const { data: msgs } = await supabase
             .from('messages')
             .select('*')
             .eq('conversation_id', conv.id)
             .order('created_at', { ascending: true });
 
-          const formattedMessages: Message[] = (msgs || []).map(m => ({
+          const formattedMessages: Message[] = (msgs || []).map((m: { id: string; role: string; content: string; created_at: string; metadata?: { sources?: GroundingSource[]; places?: MapPlace[]; images?: string[] } }) => ({
             id: m.id,
             role: m.role as 'user' | 'model',
             text: m.content,
@@ -511,7 +511,7 @@ function App() {
         .select('id, content')
         .eq('conversation_id', chatId);
 
-      const existingMsgsMap = new Map((existingMsgs || []).map(m => [m.id, m.content]));
+      const existingMsgsMap = new Map((existingMsgs || []).map((m: { id: string; content: string }) => [m.id, m.content]));
 
       // Filter out transient messages
       const validMessages = messages.filter(m =>
@@ -716,7 +716,7 @@ function App() {
       if (saveTimeoutRef.current) clearTimeout(saveTimeoutRef.current);
       saveTimeoutRef.current = setTimeout(() => {
         // Verificar sesión antes de guardar
-        supabase.auth.getSession().then(({ data }) => {
+        supabase.auth.getSession().then(({ data }: { data: { session: { user: { id: string } } | null } }) => {
           console.log('Current Lia session before save:', data.session ? `User: ${data.session.user.id}` : 'No session');
         });
         saveCurrentChat();
@@ -1630,315 +1630,328 @@ function App() {
 
   return (
     <div style={{ display: 'flex', flexDirection: 'column', height: '100vh', backgroundColor: 'var(--bg-dark-main)' }}>
-      {/* Header */}
-      <header style={{
-        padding: '12px 16px',
+      {/* Compact Header */}
+      <header 
+        className="compact-header-gap" 
+        style={{
+        padding: '8px 12px',
         borderBottom: '1px solid var(--bg-dark-secondary)',
         display: 'flex',
         alignItems: 'center',
         justifyContent: 'space-between',
-        backgroundColor: isLiveActive ? 'rgba(16, 185, 129, 0.08)' : 'var(--bg-dark-main)',
-        transition: 'background-color 0.3s'
+        backgroundColor: isLiveActive ? 'rgba(16, 185, 129, 0.05)' : 'var(--bg-dark-main)',
+        transition: 'background-color 0.3s',
+        gap: '8px'
       }}>
-        <div style={{ display: 'flex', alignItems: 'center', gap: '12px' }}>
-          {/* Hamburger Menu Button */}
+        {/* Left: Menu + Avatar + Name/Model inline */}
+        <div style={{ display: 'flex', alignItems: 'center', gap: '8px', flex: 1, minWidth: 0 }}>
+          {/* Hamburger - smaller */}
           <button
             onClick={() => setIsSidebarOpen(!isSidebarOpen)}
             style={{
               background: isSidebarOpen ? 'var(--bg-dark-tertiary)' : 'transparent',
               border: 'none',
-              borderRadius: '8px',
-              padding: '8px',
+              borderRadius: '6px',
+              padding: '6px',
               cursor: 'pointer',
               color: isSidebarOpen ? 'var(--color-accent)' : 'var(--color-gray-medium)',
               transition: 'all 0.2s',
               display: 'flex',
               alignItems: 'center',
-              justifyContent: 'center'
+              justifyContent: 'center',
+              flexShrink: 0
             }}
             title="Menú"
           >
-            <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round">
+            <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round">
               <line x1="3" y1="6" x2="21" y2="6"></line>
               <line x1="3" y1="12" x2="21" y2="12"></line>
               <line x1="3" y1="18" x2="21" y2="18"></line>
             </svg>
           </button>
 
+          {/* Avatar - smaller */}
           <img
             src={liaAvatar}
             alt="SOFLIA"
             style={{
-              width: '36px',
-              height: '36px',
+              width: '28px',
+              height: '28px',
               borderRadius: '50%',
               objectFit: 'cover',
-              border: `2px solid ${isLiveActive ? 'var(--color-success)' : 'var(--color-accent)'}`
+              border: `2px solid ${isLiveActive ? 'var(--color-success)' : 'var(--color-accent)'}`,
+              flexShrink: 0
             }}
           />
-          <div>
-            <h1 style={{
-              fontSize: '15px',
+
+          {/* Name + Model in single row */}
+          <div style={{ display: 'flex', alignItems: 'center', gap: '8px', minWidth: 0, flex: 1 }}>
+            <span style={{
+              fontSize: '14px',
               fontWeight: 600,
-              margin: 0,
               color: 'var(--color-white)',
-              display: 'flex',
-              alignItems: 'center',
-              gap: '6px'
+              flexShrink: 0
             }}>
               SOFLIA
-              {isLiveActive && (
-                <span style={{
-                  fontSize: '10px',
-                  padding: '2px 6px',
-                  backgroundColor: 'var(--color-success)',
-                  borderRadius: '4px',
-                  color: 'white'
-                }}>LIVE</span>
-              )}
-            </h1>
-            <span style={{ fontSize: '11px', color: 'var(--color-gray-medium)' }}>
-              {isLiveActive ? 'Conectada en tiempo real' : 'Tu asistente de productividad'}
             </span>
 
-            {/* Model Selector in Header */}
-            <div style={{ marginTop: '2px' }}>
-              <button
-                onClick={() => setIsModelSelectorOpen(true)}
-                style={{
-                  background: 'rgba(255, 255, 255, 0.05)',
-                  border: '1px solid rgba(255, 255, 255, 0.1)',
-                  borderRadius: '12px',
-                  color: 'var(--color-accent)',
-                  fontSize: '11px',
-                  fontWeight: 600,
-                  padding: '4px 10px',
-                  cursor: 'pointer',
-                  outline: 'none',
-                  display: 'flex',
-                  alignItems: 'center',
-                  gap: '6px',
-                  transition: 'all 0.2s',
-                }}
-                onMouseOver={(e) => e.currentTarget.style.background = 'rgba(255, 255, 255, 0.1)'}
-                onMouseOut={(e) => e.currentTarget.style.background = 'rgba(255, 255, 255, 0.05)'}
-              >
-                {(() => {
-                  const current = MODEL_OPTIONS.find(m => m.id === preferredPrimaryModel);
-                  return (
-                    <>
-                      <span>{current?.icon || '⚡'}</span>
-                      <span>{current?.name || 'Gemini 3.0 Flash'}</span>
-                      <svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" style={{ opacity: 0.7 }}>
-                        <path d="M6 9l6 6 6-6"/>
-                      </svg>
-                    </>
-                  );
-                })()}
-              </button>
-            </div>
+            {isLiveActive && (
+              <span style={{
+                fontSize: '9px',
+                padding: '2px 5px',
+                backgroundColor: 'var(--color-success)',
+                borderRadius: '4px',
+                color: 'white',
+                fontWeight: 600,
+                flexShrink: 0
+              }}>LIVE</span>
+            )}
 
-            {/* Active Mode Indicator in Header */}
-            {(isDeepResearch || isImageGenMode || isPromptOptimizerMode || isMeetingMode) && (
-              <div style={{
+            {/* Model Selector - compact inline pill */}
+            <button
+              onClick={() => setIsModelSelectorOpen(true)}
+              style={{
+                background: 'rgba(255, 255, 255, 0.05)',
+                border: '1px solid rgba(255, 255, 255, 0.08)',
+                borderRadius: '10px',
+                color: 'var(--color-accent)',
+                fontSize: '10px',
+                fontWeight: 500,
+                padding: '3px 8px',
+                cursor: 'pointer',
+                outline: 'none',
                 display: 'flex',
                 alignItems: 'center',
-                gap: '6px',
-                marginTop: '6px',
-                padding: '4px 10px',
-                background: isDeepResearch ? 'rgba(0, 212, 179, 0.15)' :
-                           isImageGenMode ? 'rgba(168, 85, 247, 0.15)' :
-                           isPromptOptimizerMode ? 'rgba(251, 191, 36, 0.15)' :
-                           isMeetingMode ? 'rgba(6, 182, 212, 0.15)' :
-                           'rgba(59, 130, 246, 0.15)',
-                borderRadius: '12px',
-                fontSize: '11px',
-                color: isDeepResearch ? '#00d4b3' :
-                       isImageGenMode ? '#a855f7' :
-                       isPromptOptimizerMode ? '#fbbf24' :
-                       isMeetingMode ? '#06b6d4' :
-                       '#3b82f6',
-                fontWeight: 500
-              }}>
-                {isDeepResearch && (
-                  <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
-                    <circle cx="11" cy="11" r="8"></circle>
-                    <line x1="21" y1="21" x2="16.65" y2="16.65"></line>
-                  </svg>
-                )}
-                {isImageGenMode && (
-                  <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
-                    <rect x="3" y="3" width="18" height="18" rx="2" ry="2"></rect>
-                    <circle cx="8.5" cy="8.5" r="1.5"></circle>
-                    <polyline points="21 15 16 10 5 21"></polyline>
-                  </svg>
-                )}
-                {isPromptOptimizerMode && (
-                  <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
-                    <path d="M12 20h9"></path>
-                    <path d="M16.5 3.5a2.121 2.121 0 0 1 3 3L7 19l-4 1 1-4L16.5 3.5z"></path>
-                  </svg>
-                )}
-                {isMeetingMode && (
-                  <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
-                    <path d="M15 10l4.553-2.276A1 1 0 0121 8.618v6.764a1 1 0 01-1.447.894L15 14M5 18h8a2 2 0 002-2V8a2 2 0 00-2-2H5a2 2 0 00-2 2v8a2 2 0 002 2z" />
-                  </svg>
-                )}
-                {isDeepResearch ? 'Deep Research' :
-                 isImageGenMode ? 'Generación de Imagen' :
-                 isPromptOptimizerMode ? `Mejorar para ${targetAI === 'chatgpt' ? 'ChatGPT' : targetAI === 'claude' ? 'Claude' : 'Gemini'}` :
-                 isMeetingMode ? 'Agente de Reuniones' :
+                gap: '4px',
+                transition: 'all 0.2s',
+                flexShrink: 0
+              }}
+              onMouseOver={(e) => e.currentTarget.style.background = 'rgba(255, 255, 255, 0.1)'}
+              onMouseOut={(e) => e.currentTarget.style.background = 'rgba(255, 255, 255, 0.05)'}
+            >
+              {(() => {
+                const current = MODEL_OPTIONS.find(m => m.id === preferredPrimaryModel);
+                return (
+                  <>
+                    <span>{current?.icon || '⚡'}</span>
+                    <span className="hide-text-on-compact">{current?.name || 'Gemini 3 Pro'}</span>
+                    <svg width="8" height="8" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" style={{ opacity: 0.6 }}>
+                      <path d="M6 9l6 6 6-6"/>
+                    </svg>
+                  </>
+                );
+              })()}
+            </button>
+          </div>
+        </div>
+
+        {/* Right: Mode badge + Settings - all inline */}
+        <div style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
+          {/* Active Mode Indicator - compact pill */}
+          {(isDeepResearch || isImageGenMode || isPromptOptimizerMode || isMeetingMode) && (
+            <div style={{
+              display: 'flex',
+              alignItems: 'center',
+              gap: '4px',
+              padding: '3px 8px',
+              background: isDeepResearch ? 'rgba(0, 212, 179, 0.12)' :
+                         isImageGenMode ? 'rgba(168, 85, 247, 0.12)' :
+                         isPromptOptimizerMode ? 'rgba(251, 191, 36, 0.12)' :
+                         isMeetingMode ? 'rgba(6, 182, 212, 0.12)' :
+                         'rgba(59, 130, 246, 0.12)',
+              borderRadius: '8px',
+              fontSize: '10px',
+              color: isDeepResearch ? '#00d4b3' :
+                     isImageGenMode ? '#a855f7' :
+                     isPromptOptimizerMode ? '#fbbf24' :
+                     isMeetingMode ? '#06b6d4' :
+                     '#3b82f6',
+              fontWeight: 500
+            }}>
+              {isDeepResearch && (
+                <svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+                  <circle cx="11" cy="11" r="8"></circle>
+                  <line x1="21" y1="21" x2="16.65" y2="16.65"></line>
+                </svg>
+              )}
+              {isImageGenMode && (
+                <svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+                  <rect x="3" y="3" width="18" height="18" rx="2" ry="2"></rect>
+                  <circle cx="8.5" cy="8.5" r="1.5"></circle>
+                  <polyline points="21 15 16 10 5 21"></polyline>
+                </svg>
+              )}
+              {isPromptOptimizerMode && (
+                <svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+                  <path d="M12 20h9"></path>
+                  <path d="M16.5 3.5a2.121 2.121 0 0 1 3 3L7 19l-4 1 1-4L16.5 3.5z"></path>
+                </svg>
+              )}
+              {isMeetingMode && (
+                <svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+                  <path d="M15 10l4.553-2.276A1 1 0 0121 8.618v6.764a1 1 0 01-1.447.894L15 14M5 18h8a2 2 0 002-2V8a2 2 0 00-2-2H5a2 2 0 00-2 2v8a2 2 0 002 2z" />
+                </svg>
+              )}
+              <span className="hide-text-on-compact" style={{ maxWidth: '80px', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                {isDeepResearch ? 'Research' :
+                 isImageGenMode ? 'Imagen' :
+                 isPromptOptimizerMode ? 'Optimizar' :
+                 isMeetingMode ? 'Reunión' :
                  ''}
+              </span>
+              <button
+                onClick={() => {
+                  setIsDeepResearch(false);
+                  setIsImageGenMode(false);
+                  setIsPromptOptimizerMode(false);
+                  setIsMeetingMode(false);
+                  setTargetAI(null);
+                }}
+                style={{
+                  background: 'none',
+                  border: 'none',
+                  padding: '0',
+                  marginLeft: '1px',
+                  cursor: 'pointer',
+                  color: 'inherit',
+                  display: 'flex',
+                  opacity: 0.6
+                }}
+                title="Desactivar modo"
+              >
+                <svg width="8" height="8" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+                  <line x1="18" y1="6" x2="6" y2="18"></line>
+                  <line x1="6" y1="6" x2="18" y2="18"></line>
+                </svg>
+              </button>
+            </div>
+          )}
+
+          {/* Settings button */}
+          <div style={{ position: 'relative' }}>
+            <button
+              onClick={() => setIsSettingsMenuOpen(!isSettingsMenuOpen)}
+              style={{
+                background: isSettingsMenuOpen ? 'var(--bg-dark-tertiary)' : 'var(--bg-dark-secondary)',
+                border: `1px solid ${isSettingsMenuOpen ? 'var(--color-accent)' : 'transparent'}`,
+                borderRadius: '6px',
+                padding: '6px',
+                cursor: 'pointer',
+                color: isSettingsMenuOpen ? 'var(--color-accent)' : 'var(--color-gray-medium)',
+                transition: 'all 0.2s',
+                display: 'flex',
+                alignItems: 'center',
+                justifyContent: 'center'
+              }}
+              title="Configuración"
+            >
+              <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+                <circle cx="12" cy="12" r="3" />
+                <path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1 0 2.83 2 2 0 0 1-2.83 0l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-2 2 2 2 0 0 1-2-2v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83 0 2 2 0 0 1 0-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1-2-2 2 2 0 0 1 2-2h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 0-2.83 2 2 0 0 1 2.83 0l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 2-2 2 2 0 0 1 2 2v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 0 2 2 0 0 1 0 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 2 2 2 2 0 0 1-2 2h-.09a1.65 1.65 0 0 0-1.51 1z" />
+              </svg>
+            </button>
+
+            {/* Settings Dropdown */}
+            {isSettingsMenuOpen && (
+              <div style={{
+                position: 'absolute',
+                top: '100%',
+                right: '0',
+                marginTop: '6px',
+                background: 'var(--bg-modal)',
+                border: '1px solid var(--border-modal)',
+                borderRadius: '10px',
+                padding: '6px',
+                minWidth: '180px',
+                boxShadow: 'var(--shadow-modal)',
+                zIndex: 1000
+              }}>
+                {/* Theme Selector */}
+                <div style={{ padding: '6px', marginBottom: '6px' }}>
+                  <div style={{ fontSize: '11px', color: 'var(--color-gray-medium)', marginBottom: '6px' }}>
+                    Tema
+                  </div>
+                  <div style={{ display: 'flex', background: 'var(--bg-dark-secondary)', borderRadius: '6px', padding: '2px' }}>
+                    {(['light', 'dark', 'system'] as const).map((t) => (
+                      <button
+                        key={t}
+                        onClick={() => setTheme(t)}
+                        style={{
+                          flex: 1,
+                          background: theme === t ? 'var(--color-accent)' : 'transparent',
+                          border: 'none',
+                          borderRadius: '4px',
+                          padding: '5px',
+                          cursor: 'pointer',
+                          color: theme === t ? (theme === 'light' ? '#fff' : '#000') : 'var(--color-gray-medium)',
+                          fontSize: '12px',
+                          display: 'flex',
+                          alignItems: 'center',
+                          justifyContent: 'center',
+                        }}
+                        title={t === 'light' ? 'Claro' : t === 'dark' ? 'Oscuro' : 'Sistema'}
+                      >
+                        {t === 'light' && (
+                          <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+                            <circle cx="12" cy="12" r="5" />
+                            <line x1="12" y1="1" x2="12" y2="3" />
+                            <line x1="12" y1="21" x2="12" y2="23" />
+                            <line x1="4.22" y1="4.22" x2="5.64" y2="5.64" />
+                            <line x1="18.36" y1="18.36" x2="19.78" y2="19.78" />
+                            <line x1="1" y1="12" x2="3" y2="12" />
+                            <line x1="21" y1="12" x2="23" y2="12" />
+                            <line x1="4.22" y1="19.78" x2="5.64" y2="18.36" />
+                            <line x1="18.36" y1="5.64" x2="19.78" y2="4.22" />
+                          </svg>
+                        )}
+                        {t === 'dark' && (
+                          <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+                            <path d="M21 12.79A9 9 0 1 1 11.21 3 7 7 0 0 0 21 12.79z" />
+                          </svg>
+                        )}
+                        {t === 'system' && (
+                          <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+                            <rect x="2" y="3" width="20" height="14" rx="2" ry="2" />
+                            <line x1="8" y1="21" x2="16" y2="21" />
+                            <line x1="12" y1="17" x2="12" y2="21" />
+                          </svg>
+                        )}
+                      </button>
+                    ))}
+                  </div>
+                </div>
+
+                <div style={{ height: '1px', background: 'var(--border-modal)', margin: '4px 0 6px 0' }}></div>
+
+                {/* Clear Chat */}
                 <button
                   onClick={() => {
-                    setIsDeepResearch(false);
-                    setIsImageGenMode(false);
-                    setIsPromptOptimizerMode(false);
-                    setIsMeetingMode(false);
-                    setTargetAI(null);
+                    setMessages([]);
+                    setIsSettingsMenuOpen(false);
                   }}
                   style={{
-                    background: 'none',
-                    border: 'none',
-                    padding: '0',
-                    marginLeft: '2px',
-                    cursor: 'pointer',
-                    color: 'inherit',
+                    width: '100%',
                     display: 'flex',
-                    opacity: 0.7
+                    alignItems: 'center',
+                    gap: '8px',
+                    padding: '8px 10px',
+                    background: 'rgba(239, 68, 68, 0.1)',
+                    border: 'none',
+                    borderRadius: '6px',
+                    color: '#ef4444',
+                    cursor: 'pointer',
+                    fontSize: '12px',
                   }}
-                  title="Desactivar modo"
                 >
-                  <svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
-                    <line x1="18" y1="6" x2="6" y2="18"></line>
-                    <line x1="6" y1="6" x2="18" y2="18"></line>
+                  <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+                    <polyline points="3 6 5 6 21 6"></polyline>
+                    <path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"></path>
                   </svg>
+                  Borrar Chat
                 </button>
               </div>
             )}
           </div>
-        </div>
-
-        <div style={{ display: 'flex', gap: '4px', position: 'relative' }}>
-          <button
-            onClick={() => setIsSettingsMenuOpen(!isSettingsMenuOpen)}
-            style={{
-              background: isSettingsMenuOpen ? 'var(--bg-dark-tertiary)' : 'var(--bg-dark-secondary)',
-              border: `1px solid ${isSettingsMenuOpen ? 'var(--color-accent)' : 'transparent'}`,
-              borderRadius: '8px',
-              padding: '8px',
-              cursor: 'pointer',
-              color: isSettingsMenuOpen ? 'var(--color-accent)' : 'var(--color-gray-medium)',
-              transition: 'all 0.2s'
-            }}
-            title="Configuración"
-          >
-            <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
-              <circle cx="12" cy="12" r="3" />
-              <path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1 0 2.83 2 2 0 0 1-2.83 0l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-2 2 2 2 0 0 1-2-2v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83 0 2 2 0 0 1 0-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1-2-2 2 2 0 0 1 2-2h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 0-2.83 2 2 0 0 1 2.83 0l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 2-2 2 2 0 0 1 2 2v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 0 2 2 0 0 1 0 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 2 2 2 2 0 0 1-2 2h-.09a1.65 1.65 0 0 0-1.51 1z" />
-            </svg>
-          </button>
-
-          {/* Settings Dropdown */}
-          {isSettingsMenuOpen && (
-            <div style={{
-              position: 'absolute',
-              top: '100%',
-              right: '0',
-              marginTop: '8px',
-              background: 'var(--bg-modal)',
-              border: '1px solid var(--border-modal)',
-              borderRadius: '12px',
-              padding: '8px',
-              minWidth: '200px',
-              boxShadow: 'var(--shadow-modal)',
-              zIndex: 1000
-            }}>
-              {/* Theme Selector */}
-              <div style={{ padding: '8px', marginBottom: '8px' }}>
-                <div style={{ fontSize: '12px', color: 'var(--color-gray-medium)', marginBottom: '8px' }}>
-                  Tema
-                </div>
-                <div style={{ display: 'flex', background: 'var(--bg-dark-secondary)', borderRadius: '8px', padding: '2px' }}>
-                  {(['light', 'dark', 'system'] as const).map((t) => (
-                    <button
-                      key={t}
-                      onClick={() => setTheme(t)}
-                      style={{
-                        flex: 1,
-                        background: theme === t ? 'var(--color-accent)' : 'transparent',
-                        border: 'none',
-                        borderRadius: '6px',
-                        padding: '6px',
-                        cursor: 'pointer',
-                        color: theme === t ? (theme === 'light' ? '#fff' : '#000') : 'var(--color-gray-medium)', // Fix text contrast
-                        fontSize: '14px',
-                        display: 'flex',
-                        alignItems: 'center',
-                        justifyContent: 'center',
-                      }}
-                      title={t === 'light' ? 'Claro' : t === 'dark' ? 'Oscuro' : 'Sistema'}
-                    >
-                      {t === 'light' && (
-                        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
-                          <circle cx="12" cy="12" r="5" />
-                          <line x1="12" y1="1" x2="12" y2="3" />
-                          <line x1="12" y1="21" x2="12" y2="23" />
-                          <line x1="4.22" y1="4.22" x2="5.64" y2="5.64" />
-                          <line x1="18.36" y1="18.36" x2="19.78" y2="19.78" />
-                          <line x1="1" y1="12" x2="3" y2="12" />
-                          <line x1="21" y1="12" x2="23" y2="12" />
-                          <line x1="4.22" y1="19.78" x2="5.64" y2="18.36" />
-                          <line x1="18.36" y1="5.64" x2="19.78" y2="4.22" />
-                        </svg>
-                      )}
-                      {t === 'dark' && (
-                        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
-                          <path d="M21 12.79A9 9 0 1 1 11.21 3 7 7 0 0 0 21 12.79z" />
-                        </svg>
-                      )}
-                      {t === 'system' && (
-                        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
-                          <rect x="2" y="3" width="20" height="14" rx="2" ry="2" />
-                          <line x1="8" y1="21" x2="16" y2="21" />
-                          <line x1="12" y1="17" x2="12" y2="21" />
-                        </svg>
-                      )}
-                    </button>
-                  ))}
-                </div>
-              </div>
-
-              <div style={{ height: '1px', background: 'var(--border-modal)', margin: '4px 0 8px 0' }}></div>
-
-              {/* Clear Chat */}
-              <button
-                onClick={() => {
-                  setMessages([]);
-                  setIsSettingsMenuOpen(false);
-                }}
-                style={{
-                  width: '100%',
-                  display: 'flex',
-                  alignItems: 'center',
-                  gap: '10px',
-                  padding: '10px 12px',
-                  background: 'rgba(239, 68, 68, 0.1)',
-                  border: 'none',
-                  borderRadius: '8px',
-                  color: '#ef4444',
-                  cursor: 'pointer',
-                  fontSize: '13px',
-                }}
-              >
-                <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
-                  <polyline points="3 6 5 6 21 6"></polyline>
-                  <path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"></path>
-                </svg>
-                Borrar Conversación
-              </button>
-            </div>
-          )}
         </div>
       </header>
 

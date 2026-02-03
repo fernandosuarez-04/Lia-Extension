@@ -20,7 +20,9 @@
       "Bash(openssl genrsa:*)",
       "Bash(openssl rsa:*)",
       "Bash(base64:*)",
-      "Bash(npx tsc:*)"
+      "Bash(npx tsc:*)",
+      "WebFetch(domain:developer.chrome.com)",
+      "WebFetch(domain:raw.githubusercontent.com)"
     ]
   }
 }

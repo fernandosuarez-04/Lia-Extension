@@ -42,11 +42,11 @@ html[data-theme="light"] {
   --color-gray-medium: #6c757d;
   --color-accent: #0a2540; /* Accent becomes Deep Blue in light mode as requested */
   --color-on-accent: #ffffff; /* White text on dark blue accent */
-  
+
   /* Modal & Dropdown specific overrides */
   --bg-modal: #ffffff;
   --border-modal: #e9ecef;
-  --shadow-modal: 0 4px 20px rgba(0,0,0,0.1);
+  --shadow-modal: 0 4px 20px rgba(0, 0, 0, 0.1);
 }
 
 html[data-theme="dark"] {
@@ -59,8 +59,7 @@ html[data-theme="dark"] {
   --color-on-accent: #000000;
 }
 /* Default fallback */
-  /* Create a new :root block or merge with existing? Safer to just update the existing :root at the top and remove the bottom one */
-
+/* Create a new :root block or merge with existing? Safer to just update the existing :root at the top and remove the bottom one */
 
 * {
   box-sizing: border-box;
@@ -74,8 +73,8 @@ body {
   color: var(--color-white);
   -webkit-font-smoothing: antialiased;
   -moz-osx-font-smoothing: grayscale;
-  min-width: 400px; /* Ensure minimum size for popup */
-  min-height: 600px;
+  min-width: 320px; /* More flexible minimum for small screens */
+  min-height: 500px;
   width: 100%;
   height: 100vh;
   overflow: hidden;
@@ -233,7 +232,7 @@ html {
   color: #c9d1d9;
   padding: 2px 6px;
   border-radius: 6px;
-  font-family: 'SF Mono', 'Fira Code', 'Consolas', 'Monaco', monospace;
+  font-family: "SF Mono", "Fira Code", "Consolas", "Monaco", monospace;
   font-size: 0.875em;
   font-weight: 500;
   white-space: pre-wrap;
@@ -256,7 +255,7 @@ html {
   font-size: 13px;
   line-height: 1.6;
   display: block;
-  font-family: 'SF Mono', 'Fira Code', 'Consolas', 'Monaco', monospace;
+  font-family: "SF Mono", "Fira Code", "Consolas", "Monaco", monospace;
 }
 
 .markdown-content a {
@@ -309,7 +308,11 @@ html {
 }
 
 .markdown-content th {
-  background: linear-gradient(135deg, rgba(0, 212, 179, 0.15) 0%, rgba(0, 212, 179, 0.05) 100%);
+  background: linear-gradient(
+    135deg,
+    rgba(0, 212, 179, 0.15) 0%,
+    rgba(0, 212, 179, 0.05) 100%
+  );
   color: var(--color-accent);
   font-weight: 600;
   font-size: 11px;
@@ -356,7 +359,7 @@ html {
 }
 
 .markdown-content input[type="checkbox"]:checked::after {
-  content: '✓';
+  content: "✓";
   position: absolute;
   color: black;
   font-size: 12px;
@@ -379,7 +382,9 @@ html {
 }
 
 @keyframes typingBounce {
-  0%, 60%, 100% {
+  0%,
+  60%,
+  100% {
     transform: translateY(0);
   }
   30% {
@@ -420,13 +425,14 @@ button:active {
   transition-timing-function: ease-out;
 }
 
-input, textarea {
+input,
+textarea {
   transition: none;
 }
 
 /* Typewriter Cursor */
 .typing-cursor::after {
-  content: '▋';
+  content: "▋";
   display: inline-block;
   vertical-align: baseline;
   animation: blink 1s step-end infinite;
@@ -436,7 +442,134 @@ input, textarea {
 }
 
 @keyframes blink {
-  0%, 100% { opacity: 1; }
-  50% { opacity: 0; }
+  0%,
+  100% {
+    opacity: 1;
+  }
+  50% {
+    opacity: 0;
+  }
 }
 
+/* ========== RESPONSIVE DESIGN ========== */
+
+/* Small screens (popup on 14" laptops, etc.) */
+@media screen and (max-height: 700px) {
+  body {
+    min-height: 450px;
+  }
+
+  .markdown-content {
+    font-size: 13px;
+    line-height: 1.6;
+  }
+
+  .markdown-content h1 {
+    font-size: 16px;
+    margin: 14px 0 8px 0;
+  }
+
+  .markdown-content h2 {
+    font-size: 15px;
+    margin: 12px 0 6px 0;
+  }
+
+  .markdown-content h3 {
+    font-size: 14px;
+  }
+
+  .markdown-content p {
+    margin: 8px 0;
+  }
+
+  .markdown-content ul,
+  .markdown-content ol {
+    margin: 8px 0;
+    padding-left: 20px;
+  }
+
+  .markdown-content li {
+    margin: 4px 0;
+  }
+
+  .markdown-content pre {
+    margin: 12px 0;
+  }
+
+  .markdown-content table {
+    margin: 14px 0;
+    font-size: 12px;
+  }
+
+  .markdown-content th,
+  .markdown-content td {
+    padding: 8px 12px;
+  }
+}
+
+/* Very small screens */
+@media screen and (max-height: 550px) {
+  body {
+    min-height: 400px;
+  }
+
+  .markdown-content {
+    font-size: 12px;
+    line-height: 1.5;
+  }
+
+  .markdown-content h1 {
+    font-size: 15px;
+    padding-bottom: 6px;
+  }
+
+  .markdown-content h2 {
+    font-size: 14px;
+  }
+
+  .markdown-content pre code {
+    font-size: 11px;
+    padding: 12px;
+  }
+}
+
+/* Width-based responsive */
+@media screen and (max-width: 380px) {
+  body {
+    min-width: 300px;
+  }
+
+  .markdown-content {
+    font-size: 13px;
+  }
+
+  .markdown-content table {
+    font-size: 11px;
+  }
+
+  .markdown-content th,
+  .markdown-content td {
+    padding: 6px 10px;
+  }
+
+  .markdown-content pre code {
+    font-size: 11px;
+  }
+}
+
+/* Responsive Visibility Utilities for Header */
+@media screen and (max-width: 450px) {
+  .hide-text-on-compact {
+    display: none !important;
+  }
+
+  .compact-header-gap {
+    gap: 4px !important;
+  }
+}
+
+@media screen and (max-width: 380px) {
+  .hide-on-very-compact {
+    display: none !important;
+  }
+}

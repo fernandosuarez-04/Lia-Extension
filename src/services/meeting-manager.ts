@@ -77,19 +77,18 @@ export class MeetingManager {
   private sessionStartTime: number = 0;
   private autoSaveInterval: ReturnType<typeof setInterval> | null = null;
   private sessionCheckInterval: ReturnType<typeof setInterval> | null = null;
-  private pendingTranscriptBuffer: string = '';
+  // REMOVED: No longer needed with GeminiTranscriptionService
+  // private pendingTranscriptBuffer: string = '';
   private lastSegmentId: number = 0;
   private reconnectAttempts: number = 0;
   private isSetupComplete: boolean = false;
   private lastAudioSentTime: number = 0;
   private bufferFlushTimeout: ReturnType<typeof setTimeout> | null = null;
-  private readonly BUFFER_FLUSH_DELAY_MS = 2000; // Flush buffer after 2 seconds of no new content
+  // REMOVED: No longer needed with GeminiTranscriptionService
+  // private readonly BUFFER_FLUSH_DELAY_MS = 2000;
 
-  // Text cleanup with Gemini
-  private cleanupQueue: string[] = [];
-  private cleanupTimeout: ReturnType<typeof setTimeout> | null = null;
-  private readonly CLEANUP_DELAY_MS = 3000; // Wait 3 seconds to batch cleanup requests
-  private isCleaningUp: boolean = false;
+  // REMOVED: Cleanup queue is no longer needed with unified Gemini transcription prompt
+  // The gemini-transcription service handles cleanup + speaker detection in a single API call
 
   // Speech-to-Text service for high-quality transcription
   // Disabled by default - requires Google Cloud Platform setup
@@ -108,6 +107,10 @@ export class MeetingManager {
   private currentSpeaker: string | null = null;
   private meetingParticipants: Array<{ id: string; name: string; isSpeaking?: boolean }> = [];
   private speakerDetectionEnabled: boolean = true;
+
+  // Deduplication: CC captions are authoritative; if Gemini produces the same text within 8s, skip it
+  private recentCCTexts: Array<{ text: string; timestamp: number }> = [];
+  private readonly CC_DEDUP_WINDOW_MS = 8000;
 
   // Audio playback for Lia's voice responses
   private audioContext: AudioContext | null = null;
@@ -156,7 +159,7 @@ export class MeetingManager {
     this.sessionUserId = userId;
     this.sessionStartTime = Date.now();
     this.localTranscript = [];
-    this.pendingTranscriptBuffer = '';
+    // this.pendingTranscriptBuffer = ''; // No longer needed
     this.lastSegmentId = 0;
     this.reconnectAttempts = 0;
     this.isSetupComplete = false;
@@ -178,15 +181,23 @@ export class MeetingManager {
         metadata: { tabId }
       });
 
-      // Start audio capture using getDisplayMedia (user will select the tab)
-      // This is the most reliable method for Manifest V3
+      // Start audio capture — try chrome.tabCapture first (no dialog, like Fireflies)
+      // Fall back to getDisplayMedia if tabCapture fails
       this.audioCapture = new MixedAudioCapture();
-      await this.audioCapture.startWithTabSelection(tabId, {
-        onAudioData: (base64Audio) => this.handleAudioData(base64Audio),
-        onError: (error) => this.handleError(error),
+      const audioCallbacks = {
+        onAudioData: (base64Audio: string) => this.handleAudioData(base64Audio),
+        onError: (error: Error) => this.handleError(error),
         onStart: () => console.log('MeetingManager: Audio capture started'),
         onStop: () => console.log('MeetingManager: Audio capture stopped')
-      });
+      };
+
+      try {
+        console.log('MeetingManager: Trying chrome.tabCapture (silent, no dialog)...');
+        await this.audioCapture.startWithTabCapture(tabId, audioCallbacks);
+      } catch {
+        console.log('MeetingManager: tabCapture failed, falling back to getDisplayMedia...');
+        await this.audioCapture.startWithTabSelection(tabId, audioCallbacks);
+      }
 
       // Start speaker detection for Google Meet
       if (platform === 'google-meet' && this.speakerDetectionEnabled) {
@@ -315,12 +326,7 @@ export class MeetingManager {
       this.bufferFlushTimeout = null;
     }
 
-    // Clear cleanup timeout
-    if (this.cleanupTimeout) {
-      clearTimeout(this.cleanupTimeout);
-      this.cleanupTimeout = null;
-    }
-    this.cleanupQueue = [];
+    // REMOVED: cleanup timeout and queue - no longer needed with unified transcription
 
     // Stop Gemini transcription service
     if (this.geminiTranscription) {
@@ -581,8 +587,9 @@ Formato: [ ] Responsable: Tarea`,
                   : this.getInteractivePrompt()
               }]
             },
-            // Enable input audio transcription - this is key for getting text from audio
-            inputAudioTranscription: {},
+            // DISABLED: inputAudioTranscription causes fragmented words and noise
+            // We use GeminiTranscriptionService instead for better quality
+            // inputAudioTranscription: {},
             tools: [{ googleSearch: {} }]
           }
         };
@@ -753,56 +760,105 @@ Formato: [ ] Responsable: Tarea`,
 
   /**
    * Handle transcription results from Gemini service
+   * Simplified: No line splitting, no additional cleanup (Gemini already does it)
    */
+  /**
+   * Simple similarity check: are > 60% of words shared between two short strings?
+   */
+  private textsSimilar(a: string, b: string): boolean {
+    const wordsA = new Set(a.toLowerCase().split(/\s+/).filter(w => w.length > 2));
+    const wordsB = new Set(b.toLowerCase().split(/\s+/).filter(w => w.length > 2));
+    if (wordsA.size === 0 || wordsB.size === 0) return false;
+    let shared = 0;
+    for (const w of wordsA) { if (wordsB.has(w)) shared++; }
+    const ratio = shared / Math.min(wordsA.size, wordsB.size);
+    return ratio > 0.6;
+  }
+
   private handleGeminiTranscriptionResult(result: GeminiTranscriptionResult): void {
     if (!result.text || result.text.trim().length < 2) {
       return;
     }
 
-    console.log('MeetingManager: Gemini transcription result', {
-      text: result.text.substring(0, 100) + '...',
-      speaker: result.speaker,
-      detectedSpeaker: this.currentSpeaker
-    });
+    const text = result.text.trim();
+
+    // Dedup: if a CC caption with very similar text arrived recently, skip this Gemini result
+    // CC captions already have correct speaker names from Meet
+    const now = Date.now();
+    this.recentCCTexts = this.recentCCTexts.filter(c => now - c.timestamp < this.CC_DEDUP_WINDOW_MS);
+    const isDuplicate = this.recentCCTexts.some(c => this.textsSimilar(c.text, text));
+    if (isDuplicate) {
+      console.log('MeetingManager: Gemini result skipped (duplicate of CC caption):', text.substring(0, 60));
+      return;
+    }
 
     // Priority for speaker detection:
     // 1. DOM-detected active speaker (most reliable for Google Meet)
-    // 2. Speaker from Gemini cleanup result
-    // 3. Text-based speaker labels
-    let defaultSpeaker = this.currentSpeaker || result.speaker;
+    // 2. Speaker from Gemini result
+    // 3. First participant from participant list (fallback)
+    // 4. Default to "Participante"
+    let speaker: string | undefined = this.currentSpeaker
+      || result.speaker
+      || (this.meetingParticipants.length > 0 ? this.meetingParticipants[0].name : 'Participante');
 
-    // Split by speaker labels if present in text
-    const lines = result.text.split(/\n/).filter(line => line.trim());
+    console.log('MeetingManager: Gemini transcription result', {
+      text: text.substring(0, 100) + '...',
+      geminiSpeaker: result.speaker,
+      domDetectedSpeaker: this.currentSpeaker,
+      finalSpeaker: speaker,
+      participants: this.meetingParticipants.map(p => p.name)
+    });
 
-    for (const line of lines) {
-      let text = line.trim();
-      let speaker: string | undefined = defaultSpeaker || undefined;
+    // Remove speaker labels if Gemini added them (we already have speaker from detection)
+    let cleanText = text.replace(/^\[?(Hablante|Speaker|Participante)\s*\d*\]?\s*:?\s*/i, '').trim();
 
-      // Check for speaker labels like "Hablante 1:", "Speaker 1:", "[Hablante 1]"
-      const speakerMatch = text.match(/^\[?(Hablante|Speaker|Participante)\s*(\d+)\]?\s*:?\s*/i);
-      if (speakerMatch) {
-        // If we don't have a DOM-detected speaker, use the text label
-        if (!this.currentSpeaker) {
-          speaker = `Participante ${speakerMatch[2]}`;
-        }
-        text = text.replace(speakerMatch[0], '').trim();
-      }
-
-      if (text.length < 2) continue;
-
-      const segment: TranscriptSegmentLocal = {
-        id: `segment_${++this.lastSegmentId}`,
-        timestamp: Date.now(),
-        relativeTimeMs: Date.now() - this.sessionStartTime,
-        speaker,
-        text,
-        isLiaResponse: false,
-        isLiaInvocation: text.toLowerCase().includes('lia')
-      };
-
-      this.localTranscript.push(segment);
-      this.callbacks.onTranscriptUpdate(segment);
+    if (cleanText.length < 2) {
+      console.log('MeetingManager: Text too short after cleanup, skipping');
+      return;
     }
+
+    const segment: TranscriptSegmentLocal = {
+      id: `segment_${++this.lastSegmentId}`,
+      timestamp: Date.now(),
+      relativeTimeMs: Date.now() - this.sessionStartTime,
+      speaker,
+      text: cleanText,
+      isLiaResponse: false,
+      isLiaInvocation: cleanText.toLowerCase().includes('lia')
+    };
+
+    console.log('MeetingManager: ✅ Adding transcript segment:', {
+      id: segment.id,
+      speaker: segment.speaker,
+      text: segment.text.substring(0, 50) + '...'
+    });
+
+    this.localTranscript.push(segment);
+    this.callbacks.onTranscriptUpdate(segment);
+  }
+
+  /**
+   * Handle a CC caption from Google Meet (scraped from DOM like Tactiq).
+   * Speaker name comes directly from Meet's own system — highest priority.
+   */
+  private handleCCCaption(speaker: string, text: string): void {
+    // Record for deduplication against Gemini audio transcription
+    this.recentCCTexts.push({ text, timestamp: Date.now() });
+
+    const segment: TranscriptSegmentLocal = {
+      id: `segment_${++this.lastSegmentId}`,
+      timestamp: Date.now(),
+      relativeTimeMs: Date.now() - this.sessionStartTime,
+      speaker,
+      text,
+      isLiaResponse: false,
+      isLiaInvocation: text.toLowerCase().includes('lia')
+    };
+
+    console.log('MeetingManager: ✅ CC caption segment:', { speaker: segment.speaker, text: segment.text.substring(0, 80) });
+
+    this.localTranscript.push(segment);
+    this.callbacks.onTranscriptUpdate(segment);
   }
 
   /**
@@ -916,8 +972,10 @@ Formato: [ ] Responsable: Tarea`,
       return;
     }
 
-    // Handle input audio transcription - THIS IS THE KEY FOR TRANSCRIPTION
-    // The server sends these events when inputAudioTranscription is enabled in setup
+    // DISABLED: inputAudioTranscription is now disabled in favor of GeminiTranscriptionService
+    // The Live API's inputAudioTranscription produces fragmented words and noise
+    // We use GeminiTranscriptionService instead which provides much better quality
+    /*
     if (data.inputAudioTranscription) {
       const transcribedText = data.inputAudioTranscription.text;
       console.log('MeetingManager: ✅ Received inputAudioTranscription event!', {
@@ -931,7 +989,6 @@ Formato: [ ] Responsable: Tarea`,
       return;
     }
 
-    // Also check for alternative transcription event formats
     if (data.serverContent?.inputTranscription) {
       const transcribedText = data.serverContent.inputTranscription.text;
       console.log('MeetingManager: ✅ Received serverContent.inputTranscription!', {
@@ -942,6 +999,7 @@ Formato: [ ] Responsable: Tarea`,
       }
       return;
     }
+    */
 
     // Handle error messages from server
     if (data.error) {
@@ -993,6 +1051,9 @@ Formato: [ ] Responsable: Tarea`,
     }
   }
 
+  // DISABLED: This function was used with Live API's inputAudioTranscription
+  // Now we use GeminiTranscriptionService exclusively
+  /*
   private handleTranscription(text: string): void {
     // Clear any pending flush timeout since we have new content
     if (this.bufferFlushTimeout) {
@@ -1028,16 +1089,14 @@ Formato: [ ] Responsable: Tarea`,
       }, this.BUFFER_FLUSH_DELAY_MS);
     }
   }
+  */
 
   /**
    * Flush any remaining content in the transcript buffer
    */
   private flushTranscriptBuffer(): void {
-    if (this.pendingTranscriptBuffer.trim().length > 3) {
-      console.log('MeetingManager: Flushing transcript buffer:', this.pendingTranscriptBuffer.substring(0, 50));
-      this.addTranscriptSegment(this.pendingTranscriptBuffer.trim(), false);
-      this.pendingTranscriptBuffer = '';
-    }
+    // No longer needed - GeminiTranscriptionService handles buffering internally
+    // Keeping this function for compatibility with existing code
     this.bufferFlushTimeout = null;
   }
 
@@ -1057,10 +1116,8 @@ Formato: [ ] Responsable: Tarea`,
     this.localTranscript.push(segment);
     this.callbacks.onTranscriptUpdate(segment);
 
-    // Queue for deeper cleanup with Gemini (if not a Lia response)
-    if (!isLiaResponse && cleanedText.length > 10) {
-      this.queueForCleanup(segment.id, cleanedText);
-    }
+    // DISABLED: No additional cleanup needed - Gemini Native Audio already provides clean transcription
+    // The unified prompt in gemini-transcription.ts handles cleanup + speaker detection in one call
   }
 
   /**
@@ -1097,101 +1154,8 @@ Formato: [ ] Responsable: Tarea`,
       .trim();
   }
 
-  /**
-   * Queue a segment for deeper cleanup with Gemini
-   */
-  private queueForCleanup(segmentId: string, text: string): void {
-    this.cleanupQueue.push(`${segmentId}::${text}`);
-
-    // Reset the cleanup timer
-    if (this.cleanupTimeout) {
-      clearTimeout(this.cleanupTimeout);
-    }
-
-    // Process cleanup after delay (batch multiple segments)
-    this.cleanupTimeout = setTimeout(() => {
-      this.processCleanupQueue();
-    }, this.CLEANUP_DELAY_MS);
-  }
-
-  /**
-   * Process the cleanup queue using Gemini
-   */
-  private async processCleanupQueue(): Promise<void> {
-    if (this.isCleaningUp || this.cleanupQueue.length === 0) {
-      return;
-    }
-
-    this.isCleaningUp = true;
-    const itemsToProcess = [...this.cleanupQueue];
-    this.cleanupQueue = [];
-
-    try {
-      // Extract just the text portions
-      const textsToClean = itemsToProcess.map(item => {
-        const [, text] = item.split('::');
-        return text;
-      });
-
-      const combinedText = textsToClean.join('\n');
-
-      // Use Gemini to clean up the text
-      const { GoogleGenerativeAI } = await import('@google/generative-ai');
-      // Get API key from database or fallback to env
-      let cleanupApiKey = await getApiKeyWithCache('google');
-      if (!cleanupApiKey) {
-        cleanupApiKey = GOOGLE_API_KEY;
-      }
-      if (!cleanupApiKey) {
-        console.warn('No API key available for text cleanup');
-        return;
-      }
-      const genAI = new GoogleGenerativeAI(cleanupApiKey);
-      const model = genAI.getGenerativeModel({ model: MODELS.PRIMARY });
-
-      const prompt = `Corrige SOLO los errores de transcripción en el siguiente texto.
-Las palabras están separadas incorrectamente (ej: "fun cion a" debe ser "funciona").
-NO cambies el significado, NO resumas, NO añadas puntuación extra.
-Devuelve SOLO el texto corregido, línea por línea, en el mismo orden:
-
-${combinedText}`;
-
-      const result = await model.generateContent(prompt);
-      const response = await result.response;
-      const cleanedLines = response.text().split('\n').filter(line => line.trim());
-
-      // Update segments with cleaned text
-      for (let i = 0; i < Math.min(itemsToProcess.length, cleanedLines.length); i++) {
-        const [segmentId] = itemsToProcess[i].split('::');
-        const cleanedText = cleanedLines[i].trim();
-
-        if (cleanedText) {
-          // Find and update the segment
-          const segmentIndex = this.localTranscript.findIndex(s => s.id === segmentId);
-          if (segmentIndex !== -1) {
-            const oldText = this.localTranscript[segmentIndex].text;
-            if (cleanedText !== oldText && cleanedText.length > 3) {
-              this.localTranscript[segmentIndex].text = cleanedText;
-              // Notify UI of the update
-              this.callbacks.onTranscriptUpdate(this.localTranscript[segmentIndex]);
-              console.log('MeetingManager: Cleaned text:', oldText, '->', cleanedText);
-            }
-          }
-        }
-      }
-    } catch (error) {
-      console.error('MeetingManager: Failed to clean up text with Gemini', error);
-    } finally {
-      this.isCleaningUp = false;
-
-      // Process any items that were added during cleanup
-      if (this.cleanupQueue.length > 0) {
-        this.cleanupTimeout = setTimeout(() => {
-          this.processCleanupQueue();
-        }, this.CLEANUP_DELAY_MS);
-      }
-    }
-  }
+  // REMOVED: queueForCleanup and processCleanupQueue methods
+  // No longer needed - Gemini transcription service handles cleanup in unified prompt
 
   private sendTextToLiveAPI(text: string): void {
     if (!this.ws || this.ws.readyState !== WebSocket.OPEN) {
@@ -1462,13 +1426,16 @@ INSTRUCCIONES:
     }
 
     this.speakerChangeHandler = (message, _sender, sendResponse) => {
+      console.log('MeetingManager: Received message:', message.type, JSON.stringify(message).substring(0, 200));
+
       if (message.type === 'SPEAKER_CHANGED') {
+        const previousSpeaker = this.currentSpeaker;
         this.currentSpeaker = message.speaker;
-        console.log('MeetingManager: Active speaker changed to:', this.currentSpeaker);
+        console.log('MeetingManager: ✅ Active speaker changed:', previousSpeaker, '->', this.currentSpeaker, 'confidence:', message.confidence);
         sendResponse({ received: true });
       } else if (message.type === 'PARTICIPANTS_UPDATED') {
         this.meetingParticipants = message.participants || [];
-        console.log('MeetingManager: Participants updated:', this.meetingParticipants.map((p: any) => p.name));
+        console.log('MeetingManager: ✅ Participants updated:', this.meetingParticipants.map((p: any) => p.name));
 
         // Update session with participant info
         if (this.currentSession) {
@@ -1476,6 +1443,16 @@ INSTRUCCIONES:
           this.currentSession.participant_count = this.meetingParticipants.length;
         }
 
+        sendResponse({ received: true });
+      } else if (message.type === 'CAPTION_RECEIVED') {
+        // CC caption from Google Meet (scraped by MeetCaptionScraper, like Tactiq)
+        // Speaker name comes directly from Meet — most reliable source
+        if (message.text && message.text.trim().length > 1) {
+          const speaker = message.speaker || this.currentSpeaker || 'Participante';
+          console.log('MeetingManager: ✅ CC Caption received —', speaker, ':', message.text);
+          // Route through the standard transcription handler using CC speaker as priority
+          this.handleCCCaption(speaker, message.text.trim());
+        }
         sendResponse({ received: true });
       }
     };

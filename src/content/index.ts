@@ -1,6 +1,7 @@
 console.log('SOFLIA Content Script loaded');
 
 import { MeetSpeakerDetector, MeetParticipant, SpeakerChangeEvent } from '../services/meet-speaker-detector';
+import { MeetCaptionScraper } from '../services/meet-caption-scraper';
 
 // ============================================
 // SPEAKER DETECTION
@@ -9,6 +10,7 @@ import { MeetSpeakerDetector, MeetParticipant, SpeakerChangeEvent } from '../ser
 let speakerDetector: MeetSpeakerDetector | null = null;
 let currentActiveSpeaker: string | null = null;
 let meetingParticipants: MeetParticipant[] = [];
+let captionScraper: MeetCaptionScraper | null = null;
 
 /**
  * Start speaker detection for Google Meet
@@ -56,6 +58,79 @@ function startSpeakerDetection(): void {
       });
     }
   });
+
+  // Auto-enable CC captions in Meet, then start the scraper
+  enableCCCaptions();
+
+  if (!captionScraper) {
+    captionScraper = new MeetCaptionScraper();
+    captionScraper.start((entry) => {
+      console.log('SOFLIA: CC Caption received —', entry.speaker, ':', entry.text);
+      chrome.runtime.sendMessage({
+        type: 'CAPTION_RECEIVED',
+        speaker: entry.speaker,
+        text: entry.text,
+        timestamp: entry.timestamp
+      }).catch(() => {});
+    });
+    console.log('SOFLIA: CC caption scraper started');
+  }
+}
+
+/**
+ * Auto-enable Google Meet's CC (Closed Captions) if not already on.
+ * Tries multiple selectors for the CC toggle button.
+ * If already enabled, does nothing.
+ */
+function enableCCCaptions(): void {
+  // Selectors for the CC button in Google Meet
+  const ccSelectors = [
+    'button[aria-label*="caption" i]',
+    'button[aria-label*="Caption" i]',
+    'button[aria-label*="subtitle" i]',
+    'button[aria-label*="subtítulo" i]',
+    'button[aria-label*="Subtítulo" i]',
+    '[data-tooltip*="caption" i]',
+    '[data-tooltip*="Caption" i]',
+    '[data-tooltip*="subtítulo" i]',
+    '[data-tooltip*="Subtítulo" i]',
+  ];
+
+  for (const sel of ccSelectors) {
+    try {
+      const btn = document.querySelector(sel) as HTMLElement | null;
+      if (btn) {
+        // Check if CC is already enabled by looking for aria-pressed or active state
+        const isActive = btn.getAttribute('aria-pressed') === 'true'
+          || btn.classList.contains('active')
+          || btn.getAttribute('data-state') === 'on';
+
+        if (isActive) {
+          console.log('SOFLIA: CC captions already enabled');
+          return;
+        }
+
+        // Click to enable
+        btn.click();
+        console.log('SOFLIA: CC captions auto-enabled via selector:', sel);
+        return;
+      }
+    } catch { /* skip invalid selector */ }
+  }
+
+  // Fallback: search all buttons for one containing "CC" text
+  const allButtons = document.querySelectorAll('button');
+  for (const btn of allButtons) {
+    const text = btn.textContent?.trim();
+    const ariaLabel = btn.getAttribute('aria-label') || '';
+    if (text === 'CC' || ariaLabel.toLowerCase().includes('caption') || ariaLabel.toLowerCase().includes('subtítulo')) {
+      btn.click();
+      console.log('SOFLIA: CC captions auto-enabled via text/aria fallback');
+      return;
+    }
+  }
+
+  console.log('SOFLIA: Could not find CC button — user may need to enable captions manually');
 }
 
 /**
@@ -68,6 +143,11 @@ function stopSpeakerDetection(): void {
     currentActiveSpeaker = null;
     meetingParticipants = [];
     console.log('SOFLIA: Speaker detection stopped');
+  }
+  if (captionScraper) {
+    captionScraper.stop();
+    captionScraper = null;
+    console.log('SOFLIA: CC caption scraper stopped');
   }
 }
 

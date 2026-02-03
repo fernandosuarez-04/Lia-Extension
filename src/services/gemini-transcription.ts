@@ -2,9 +2,15 @@
  * Gemini Audio Transcription Service
  * Uses Google's Gemini 2.5 Flash Native Audio to transcribe audio
  * This provides better quality than Live API's inputAudioTranscription
+ *
+ * Features:
+ * - VAD (Voice Activity Detection) to filter silence
+ * - Unified transcription + cleanup in single API call
+ * - Optimized buffer timing for low latency
  */
 
 import { MODELS } from '../config';
+import { VADService } from './vad-service';
 
 export interface GeminiTranscriptionResult {
   text: string;
@@ -15,11 +21,15 @@ export interface GeminiTranscriptionResult {
 export interface GeminiTranscriptionConfig {
   language?: string;
   contextPrompt?: string;
+  enableVAD?: boolean;
+  vadEnergyThreshold?: number;
 }
 
 const DEFAULT_CONFIG: GeminiTranscriptionConfig = {
   language: 'español',
-  contextPrompt: ''
+  contextPrompt: '',
+  enableVAD: true,
+  vadEnergyThreshold: 0.008 // RMS energy threshold — 0.008 is reliable for speech in mixed audio
 };
 
 export class GeminiTranscriptionService {
@@ -30,13 +40,31 @@ export class GeminiTranscriptionService {
   private onTranscription: ((result: GeminiTranscriptionResult) => void) | null = null;
   private onError: ((error: Error) => void) | null = null;
   private processInterval: ReturnType<typeof setInterval> | null = null;
-  private readonly BUFFER_DURATION_MS = 10000; // Process every 10 seconds for better context
-  private readonly MIN_AUDIO_DURATION_MS = 3000; // Minimum 3 seconds of audio
+  private readonly BUFFER_DURATION_MS = 2000; // Process every 2 seconds for better context (reduces hallucinations)
+  private readonly MIN_AUDIO_DURATION_MS = 1000; // Minimum 1 second of audio
   private readonly SAMPLE_RATE = 16000;
+
+  // VAD integration
+  private vadService: VADService | null = null;
+  private hasVoiceInBuffer: boolean = false;
+  private consecutiveSilenceChunks: number = 0;
+
+  // Context tracking for phrase reconstruction
+  private recentTranscripts: string[] = [];
+  private readonly MAX_CONTEXT_HISTORY = 3; // Keep last 3 transcripts for context
 
   constructor(apiKey: string, config?: Partial<GeminiTranscriptionConfig>) {
     this.apiKey = apiKey;
     this.config = { ...DEFAULT_CONFIG, ...config };
+
+    // Initialize VAD if enabled
+    if (this.config.enableVAD) {
+      this.vadService = new VADService({
+        energyThreshold: this.config.vadEnergyThreshold || 0.008,
+        minVoiceFrames: 2,
+        minSilenceFrames: 8
+      });
+    }
   }
 
   /**
@@ -50,6 +78,19 @@ export class GeminiTranscriptionService {
     this.onError = onError;
     this.audioChunks = [];
     this.isProcessing = false;
+    this.hasVoiceInBuffer = false;
+    this.consecutiveSilenceChunks = 0;
+
+    // Start VAD if enabled
+    if (this.vadService) {
+      this.vadService.start((event) => {
+        if (event.type === 'voice_start' || event.type === 'voice_active') {
+          this.hasVoiceInBuffer = true;
+          this.consecutiveSilenceChunks = 0;
+        }
+      });
+      console.log('GeminiTranscription: VAD enabled');
+    }
 
     // Start periodic processing
     this.processInterval = setInterval(() => {
@@ -66,6 +107,11 @@ export class GeminiTranscriptionService {
     if (this.processInterval) {
       clearInterval(this.processInterval);
       this.processInterval = null;
+    }
+
+    // Stop VAD
+    if (this.vadService) {
+      this.vadService.stop();
     }
 
     // Process any remaining audio
@@ -89,6 +135,15 @@ export class GeminiTranscriptionService {
       bytes[i] = binaryString.charCodeAt(i);
     }
     const audioData = new Int16Array(bytes.buffer);
+
+    // Process through VAD if enabled
+    if (this.vadService) {
+      const hasVoice = this.vadService.processAudio(audioData);
+      if (hasVoice) {
+        this.hasVoiceInBuffer = true;
+      }
+    }
+
     this.audioChunks.push(audioData);
   }
 
@@ -109,6 +164,17 @@ export class GeminiTranscriptionService {
       return;
     }
 
+    // VAD check: skip if no voice detected — never send silence/noise to API
+    if (this.vadService && !this.hasVoiceInBuffer) {
+      this.consecutiveSilenceChunks++;
+      console.log(`GeminiTranscription: VAD=silence | energy=${this.vadService.getEnergy().toFixed(5)} threshold=${this.config.vadEnergyThreshold} chunks=${this.consecutiveSilenceChunks} duration=${durationMs.toFixed(0)}ms`);
+      this.audioChunks = [];
+      return;
+    }
+    if (this.vadService) {
+      console.log(`GeminiTranscription: VAD=VOICE | energy=${this.vadService.getEnergy().toFixed(5)} threshold=${this.config.vadEnergyThreshold} duration=${durationMs.toFixed(0)}ms → sending to API`);
+    }
+
     this.isProcessing = true;
 
     // Combine all chunks
@@ -119,8 +185,9 @@ export class GeminiTranscriptionService {
       offset += chunk.length;
     }
 
-    // Clear the buffer
+    // Clear the buffer and reset VAD state
     this.audioChunks = [];
+    this.hasVoiceInBuffer = false;
 
     try {
       // Convert PCM to base64 for Gemini
@@ -132,6 +199,8 @@ export class GeminiTranscriptionService {
       // Send result to callback
       if (result && result.text && this.onTranscription) {
         this.onTranscription(result);
+        // Reset silence counter on successful transcription
+        this.consecutiveSilenceChunks = 0;
       }
     } catch (error) {
       console.error('GeminiTranscription: Error processing audio', error);
@@ -145,29 +214,40 @@ export class GeminiTranscriptionService {
 
   /**
    * Call Gemini API for transcription
+   * Unified: transcription + cleanup in a single API call for lower latency
    */
   private async callGeminiAPI(base64Audio: string): Promise<GeminiTranscriptionResult> {
     const { GoogleGenerativeAI } = await import('@google/generative-ai');
     const genAI = new GoogleGenerativeAI(this.apiKey);
 
-    // Use Gemini 2.5 Flash Native Audio for audio transcription
-    const model = genAI.getGenerativeModel({ model: MODELS.LIVE });
+    // Use Gemini with strict Spanish-only systemInstruction
+    const model = genAI.getGenerativeModel({
+      model: MODELS.TRANSCRIPTION,
+      systemInstruction: `Eres un transcriptor de audio en tiempo real para reuniones en español.
+REGLAS CRÍTICAS:
+- SOLO transcribes lo que se dice CLARAMENTE en el audio. Si no escuchas habla clara, devuelve EXACTAMENTE: {"text": "", "speaker": null}
+- NUNCA inventes ni generes texto que no estés escuchando directamente. Es mejor devolver texto vacío que inventar.
+- Si hay ruido de fondo, silencio o habla muy poco clara, devuelve texto vacío.
+- Transcribe en español. Si escuchas inglés, transcríbelo en inglés tal cual.
+- Preserva nombres propios como "Isra", "Fernando", "Lia", "Pedro".`,
+      generationConfig: {
+        temperature: 0.1,  // Low temperature for deterministic, accurate transcription
+        topK: 40,
+        topP: 0.95,
+      }
+    });
 
-    const prompt = `Transcribe el siguiente audio a texto en ${this.config.language}.
+    // Build context from recent transcripts for better phrase reconstruction
+    const contextText = this.recentTranscripts.length > 0
+      ? `\n\nCONTEXTO PREVIO (últimas transcripciones):\n${this.recentTranscripts.join('\n')}`
+      : '';
 
-INSTRUCCIONES IMPORTANTES:
-- Transcribe EXACTAMENTE lo que se dice, palabra por palabra
-- NO interpretes ni analices el contenido
-- NO añadas comentarios ni explicaciones
-- Si hay varios hablantes, intenta diferenciarlos con "Hablante 1:", "Hablante 2:", etc.
-- Incluye puntuación apropiada
-- Si no se entiende algo, escribe [inaudible]
-- Si hay ruido de fondo o silencio, omítelo
-${this.config.contextPrompt ? `\nContexto: ${this.config.contextPrompt}` : ''}
+    // Prompt: explicit about returning empty when no clear speech
+    const prompt = `Transcribe el audio. Si no hay habla clara, responde con {"text": "", "speaker": null}.
+${contextText}
+Responde SOLO con JSON: {"text": "texto transcrito o vacío si no hay habla", "speaker": null}`;
 
-Devuelve SOLO la transcripción, nada más.`;
-
-    console.log('GeminiTranscription: Calling API with audio length:', base64Audio.length);
+    console.log('GeminiTranscription: Calling unified API with audio length:', base64Audio.length);
 
     try {
       const result = await model.generateContent([
@@ -183,20 +263,52 @@ Devuelve SOLO la transcripción, nada más.`;
       const response = await result.response;
       const rawText = response.text().trim();
 
-      console.log('GeminiTranscription: Raw result:', rawText.substring(0, 100) + '...');
+      console.log('GeminiTranscription: Result:', rawText.substring(0, 150) + '...');
 
-      // Filter out common non-transcription responses
-      if (!this.isValidTranscription(rawText)) {
-        console.log('GeminiTranscription: Invalid response, skipping');
-        return { text: '' };
+      // Try to parse JSON response
+      try {
+        const jsonText = rawText.replace(/```json\n?|\n?```/g, '').trim();
+        const parsed = JSON.parse(jsonText);
+
+        const transcriptionText = parsed.text || '';
+
+        // Validate the transcription
+        if (!this.isValidTranscription(transcriptionText)) {
+          console.log('GeminiTranscription: Invalid transcription, skipping');
+          return { text: '' };
+        }
+
+        // Add to context history for future reconstructions
+        if (transcriptionText && transcriptionText.length > 5) {
+          this.recentTranscripts.push(transcriptionText);
+          if (this.recentTranscripts.length > this.MAX_CONTEXT_HISTORY) {
+            this.recentTranscripts.shift(); // Remove oldest
+          }
+        }
+
+        return {
+          text: transcriptionText,
+          speaker: parsed.speaker || undefined
+        };
+      } catch {
+        // If JSON parsing fails, try to use raw text
+        console.log('GeminiTranscription: JSON parse failed, using raw response');
+
+        if (!this.isValidTranscription(rawText)) {
+          console.log('GeminiTranscription: Invalid response, skipping');
+          return { text: '' };
+        }
+
+        // Add to context even if JSON parsing failed
+        if (rawText && rawText.length > 5) {
+          this.recentTranscripts.push(rawText);
+          if (this.recentTranscripts.length > this.MAX_CONTEXT_HISTORY) {
+            this.recentTranscripts.shift();
+          }
+        }
+
+        return { text: rawText };
       }
-
-      // Clean up the transcription with fast model
-      console.log('GeminiTranscription: Cleaning up text...');
-      const cleanedResult = await this.cleanupTranscription(rawText);
-      console.log('GeminiTranscription: Cleaned result:', cleanedResult.text.substring(0, 100) + '...');
-
-      return cleanedResult;
     } catch (error: any) {
       // Handle specific error cases
       if (error.message?.includes('Could not process audio')) {
@@ -208,92 +320,52 @@ Devuelve SOLO la transcripción, nada más.`;
   }
 
   /**
-   * Clean up transcription text using a fast model
-   */
-  private async cleanupTranscription(rawText: string): Promise<GeminiTranscriptionResult> {
-    const { GoogleGenerativeAI } = await import('@google/generative-ai');
-    const genAI = new GoogleGenerativeAI(this.apiKey);
-
-    // Use fast model for cleanup
-    const model = genAI.getGenerativeModel({ model: MODELS.FALLBACK });
-
-    const prompt = `Corrige y mejora la siguiente transcripción de audio de una reunión.
-
-TEXTO ORIGINAL:
-"${rawText}"
-
-INSTRUCCIONES:
-1. CORRIGE palabras fragmentadas (ejemplo: "pri mero" → "primero", "escu che" → "escuche")
-2. CORRIGE espacios incorrectos entre letras o sílabas
-3. MANTÉN el significado exacto, no cambies las palabras
-4. AÑADE puntuación correcta (puntos, comas, signos de interrogación)
-5. Si detectas diferentes voces/hablantes, indica el cambio con [Hablante 1], [Hablante 2], etc.
-6. NO agregues contenido nuevo, solo corrige errores de transcripción
-
-FORMATO DE RESPUESTA (JSON):
-{
-  "text": "texto corregido aquí",
-  "speaker": "Hablante 1" o null si no se detecta cambio de hablante
-}
-
-Devuelve SOLO el JSON, nada más.`;
-
-    try {
-      const result = await model.generateContent(prompt);
-      const response = await result.response;
-      const responseText = response.text().trim();
-
-      // Try to parse JSON response
-      try {
-        // Remove markdown code blocks if present
-        const jsonText = responseText.replace(/```json\n?|\n?```/g, '').trim();
-        const parsed = JSON.parse(jsonText);
-        return {
-          text: parsed.text || rawText,
-          speaker: parsed.speaker || undefined
-        };
-      } catch {
-        // If JSON parsing fails, return cleaned text directly
-        console.log('GeminiTranscription: JSON parse failed, using raw response');
-        return { text: responseText };
-      }
-    } catch (error) {
-      console.error('GeminiTranscription: Cleanup failed, using raw text', error);
-      return { text: rawText };
-    }
-  }
-
-  /**
    * Check if the response is a valid transcription
+   * Improved: Only reject if the ENTIRE response is an error message, not if it contains valid content
    */
   private isValidTranscription(text: string): boolean {
-    const lowerText = text.toLowerCase();
+    const lowerText = text.toLowerCase().trim();
 
-    // Filter out common non-transcription responses
+    // Must have at least some content
+    if (text.length < 5) {
+      return false;
+    }
+
+    // If the text is long enough (>50 chars), it's likely valid transcription
+    // even if it mentions audio issues somewhere
+    if (text.length > 50) {
+      return true;
+    }
+
+    // For short responses, check if it's PRIMARILY an error message
     const invalidPhrases = [
-      'no puedo',
-      'no es posible',
+      'no puedo transcribir',
+      'no es posible transcribir',
       'no hay audio',
-      'no se escucha',
-      'silencio',
+      'no se escucha nada',
+      'solo silencio',
       'audio vacío',
-      'sin contenido',
-      'no contiene',
+      'sin contenido de audio',
+      'no contiene audio',
       'no tiene audio',
-      'unable to',
-      'cannot process',
-      'no speech',
-      'i cannot'
+      'unable to transcribe',
+      'cannot process audio',
+      'no speech detected',
+      'i cannot transcribe',
+      '[inaudible]', // Only inaudible marker with nothing else
+      'el audio no contiene',
+      'no detecté'
     ];
 
+    // Only reject if the SHORT text matches an error pattern closely
     for (const phrase of invalidPhrases) {
-      if (lowerText.includes(phrase)) {
+      // Check if the text is essentially just this error phrase (with some tolerance)
+      if (lowerText.includes(phrase) && text.length < phrase.length + 30) {
         return false;
       }
     }
 
-    // Must have at least some content
-    return text.length > 5;
+    return true;
   }
 
   /**

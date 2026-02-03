@@ -120,29 +120,32 @@ export default function Auth() {
       display: 'flex',
       flexDirection: 'column',
       alignItems: 'center',
-      justifyContent: 'center',
+      justifyContent: 'flex-start',
       minHeight: '100vh',
       backgroundColor: '#0F1419',
       color: '#ffffff',
-      padding: '32px 16px',
-      fontFamily: "'Inter', sans-serif"
+      padding: '20px 16px',
+      paddingTop: '12px',
+      fontFamily: "'Inter', sans-serif",
+      overflowY: 'auto',
+      boxSizing: 'border-box'
     }}>
 
       {/* Logo */}
-      <div style={{ position: 'relative', marginBottom: '24px' }}>
+      <div style={{ position: 'relative', marginBottom: '12px', marginTop: '4px' }}>
          <div style={{
           position: 'absolute', top: '50%', left: '50%', transform: 'translate(-50%, -50%)',
-          width: '70px', height: '70px', background: 'radial-gradient(circle, rgba(0, 212, 179, 0.4) 0%, transparent 70%)',
-          filter: 'blur(15px)', zIndex: 0
+          width: '56px', height: '56px', background: 'radial-gradient(circle, rgba(0, 212, 179, 0.4) 0%, transparent 70%)',
+          filter: 'blur(12px)', zIndex: 0
         }} />
-        <img src="/assets/Icono.png" alt="SOFLIA" style={{ width: '64px', height: '64px', position: 'relative', zIndex: 1, filter: 'drop-shadow(0 4px 12px rgba(0,0,0,0.3))' }} />
+        <img src="/assets/Icono.png" alt="SOFLIA" style={{ width: '48px', height: '48px', position: 'relative', zIndex: 1, filter: 'drop-shadow(0 4px 12px rgba(0,0,0,0.3))' }} />
       </div>
 
-      <div style={{ textAlign: 'center', marginBottom: '24px' }}>
-        <h1 style={{ fontSize: '24px', fontWeight: '700', marginBottom: '8px', color: '#fff' }}>
-          {mode === 'login' ? 'Bienvenido a SOFLIA Agent' : 'Crear cuenta'}
+      <div style={{ textAlign: 'center', marginBottom: '14px' }}>
+        <h1 style={{ fontSize: '18px', fontWeight: '700', marginBottom: '4px', color: '#fff', margin: 0 }}>
+          {mode === 'login' ? 'Bienvenido a SOFLIA' : 'Crear cuenta'}
         </h1>
-        <p style={{ fontSize: '13px', color: '#94a3b8' }}>
+        <p style={{ fontSize: '12px', color: '#94a3b8', margin: '4px 0 0 0' }}>
           {mode === 'login'
             ? (usingSofia ? 'Inicia sesion con tu cuenta de SOFIA' : 'Accede a tu asistente personal')
             : 'Unete para potenciar tu productividad'}
@@ -154,13 +157,13 @@ export default function Auth() {
         <div style={{
           display: 'flex',
           alignItems: 'center',
-          gap: '8px',
-          padding: '8px 16px',
+          gap: '6px',
+          padding: '6px 12px',
           background: 'rgba(0, 212, 179, 0.1)',
           border: '1px solid rgba(0, 212, 179, 0.3)',
-          borderRadius: '20px',
-          marginBottom: '16px',
-          fontSize: '12px',
+          borderRadius: '16px',
+          marginBottom: '12px',
+          fontSize: '11px',
           color: '#00D4B3'
         }}>
           <SofiaLogo />
@@ -168,7 +171,7 @@ export default function Auth() {
         </div>
       )}
 
-      <form onSubmit={handleAuth} style={{ width: '100%', maxWidth: '340px', display: 'flex', flexDirection: 'column', gap: '12px' }}>
+      <form onSubmit={handleAuth} style={{ width: '100%', maxWidth: '320px', display: 'flex', flexDirection: 'column', gap: '10px' }}>
 
         {mode === 'register' && !usingSofia && (
           <>
@@ -331,14 +334,14 @@ export default function Auth() {
           type="submit"
           disabled={loading}
           style={{
-            marginTop: '12px',
+            marginTop: '8px',
             background: 'linear-gradient(135deg, #00D4B3 0%, #00a88d 100%)',
             color: '#0A2540',
             border: 'none',
-            padding: '12px',
-            borderRadius: '12px',
+            padding: '10px',
+            borderRadius: '10px',
             fontWeight: '700',
-            fontSize: '14px',
+            fontSize: '13px',
             cursor: loading ? 'wait' : 'pointer',
             boxShadow: '0 4px 15px rgba(0, 212, 179, 0.3)',
             opacity: loading ? 0.7 : 1,
@@ -346,7 +349,7 @@ export default function Auth() {
             display: 'flex',
             alignItems: 'center',
             justifyContent: 'center',
-            gap: '8px'
+            gap: '6px'
           }}
           onMouseOver={e => !loading && (e.currentTarget.style.transform = 'translateY(-1px)')}
           onMouseOut={e => !loading && (e.currentTarget.style.transform = 'translateY(0)')}
@@ -359,11 +362,11 @@ export default function Auth() {
 
       {/* Toggle login/register */}
       {!usingSofia && (
-        <div style={{ marginTop: '24px', fontSize: '13px', color: '#94a3b8' }}>
+        <div style={{ marginTop: '16px', fontSize: '12px', color: '#94a3b8' }}>
           <span>{mode === 'login' ? 'No tienes cuenta?' : 'Ya tienes cuenta?'}</span>
           <button
             onClick={() => { setMode(mode === 'login' ? 'register' : 'login'); setMessage(null); }}
-            style={{ background: 'none', border: 'none', color: '#00D4B3', fontWeight: '600', cursor: 'pointer', marginLeft: '6px' }}
+            style={{ background: 'none', border: 'none', color: '#00D4B3', fontWeight: '600', cursor: 'pointer', marginLeft: '6px', fontSize: '12px' }}
           >
             {mode === 'login' ? 'Registrate' : 'Inicia Sesion'}
           </button>
@@ -372,10 +375,10 @@ export default function Auth() {
 
       {/* SOFIA users: link to register in SOFIA */}
       {usingSofia && (
-        <div style={{ marginTop: '24px', fontSize: '13px', color: '#94a3b8', textAlign: 'center' }}>
+        <div style={{ marginTop: '16px', fontSize: '12px', color: '#94a3b8', textAlign: 'center' }}>
           <span>No tienes cuenta?</span>
           <br />
-          <span style={{ color: '#64748b', fontSize: '12px' }}>
+          <span style={{ color: '#64748b', fontSize: '11px' }}>
             Registrate en SOFIA para acceder al Agente
           </span>
         </div>
@@ -388,11 +391,11 @@ const inputStyle = {
   width: '100%',
   background: '#1E2329',
   border: '1px solid rgba(255, 255, 255, 0.1)',
-  padding: '12px 14px',
-  borderRadius: '10px',
+  padding: '10px 12px',
+  borderRadius: '8px',
   color: 'white',
   outline: 'none',
-  fontSize: '14px',
+  fontSize: '13px',
   transition: 'border-color 0.2s',
   boxSizing: 'border-box' as const,
 };

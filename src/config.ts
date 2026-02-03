@@ -26,7 +26,8 @@ export const MODELS = {
   COMPUTER_USE: "gemini-3-flash-preview",  // Mismo que PRIMARY; usa prompts custom [ACTION:...], no API nativa Computer Use
   IMAGE_GENERATION: "gemini-2.5-flash-image",
   DEEP_RESEARCH: "deep-research-pro-preview-12-2025",
-  LIVE: "gemini-2.5-flash-native-audio-latest",  // Live API model - latest version
+  LIVE: "gemini-2.5-flash-native-audio-preview-12-2025",  // Live API WebSocket (bidiGenerateContent)
+  TRANSCRIPTION: "gemini-2.5-flash",  // generateContent audio transcription
   PRO: "gemini-3-pro-preview", // High reasoning model for Prompt Engineering
   MAPS: "gemini-2.5-flash", // Maps Grounding NO disponible en Gemini 3, usar 2.5
 };

@@ -18,7 +18,7 @@ interface MeetingPanelProps {
 
 type SummaryType = 'short' | 'detailed' | 'action_items' | 'executive';
 
-// Styles object using CSS variables
+// Styles object using CSS variables - MINIMALISTA
 const styles = {
   container: {
     display: 'flex',
@@ -28,90 +28,86 @@ const styles = {
     color: 'var(--color-white)',
     fontFamily: 'Inter, sans-serif',
   },
+  // Combined header + status bar for minimal design
   header: {
     display: 'flex',
     alignItems: 'center',
     justifyContent: 'space-between',
-    padding: '16px 20px',
-    borderBottom: '1px solid var(--bg-dark-secondary)',
-    background: 'linear-gradient(180deg, var(--bg-dark-secondary) 0%, var(--bg-dark-main) 100%)',
+    padding: '8px 12px',
+    borderBottom: '1px solid rgba(255, 255, 255, 0.06)',
+    backgroundColor: 'var(--bg-dark-main)',
+    gap: '8px',
   },
   headerTitle: {
     display: 'flex',
     alignItems: 'center',
-    gap: '12px',
+    gap: '8px',
+    flex: 1,
+    minWidth: 0,
   },
   headerIcon: {
-    width: '32px',
-    height: '32px',
-    borderRadius: '8px',
+    width: '24px',
+    height: '24px',
+    borderRadius: '6px',
     background: 'linear-gradient(135deg, var(--color-accent) 0%, #00a88e 100%)',
     display: 'flex',
     alignItems: 'center',
     justifyContent: 'center',
-    boxShadow: '0 2px 8px rgba(0, 212, 179, 0.3)',
+    flexShrink: 0,
   },
   title: {
-    fontSize: '16px',
+    fontSize: '13px',
     fontWeight: 600,
     margin: 0,
-    letterSpacing: '-0.01em',
+    whiteSpace: 'nowrap' as const,
   },
   closeButton: {
     background: 'transparent',
     border: 'none',
     color: 'var(--color-gray-medium)',
     cursor: 'pointer',
-    padding: '8px',
-    borderRadius: '8px',
+    padding: '4px',
+    borderRadius: '4px',
     display: 'flex',
     alignItems: 'center',
     justifyContent: 'center',
     transition: 'all 0.2s ease',
+    flexShrink: 0,
   },
-  statusBar: {
-    display: 'flex',
-    alignItems: 'center',
-    justifyContent: 'space-between',
-    padding: '10px 20px',
-    backgroundColor: 'var(--bg-dark-secondary)',
-    borderBottom: '1px solid rgba(255, 255, 255, 0.05)',
-  },
+  // Status is now inline with header
   statusIndicator: {
     display: 'flex',
     alignItems: 'center',
-    gap: '8px',
+    gap: '6px',
+    fontSize: '11px',
+    fontWeight: 500,
   },
   statusDot: {
-    width: '8px',
-    height: '8px',
+    width: '6px',
+    height: '6px',
     borderRadius: '50%',
     animation: 'pulse 2s infinite',
   },
-  statusText: {
-    fontSize: '13px',
-    fontWeight: 500,
-  },
   platformBadge: {
-    fontSize: '11px',
+    fontSize: '9px',
     fontWeight: 500,
-    padding: '4px 10px',
-    borderRadius: '12px',
-    backgroundColor: 'var(--bg-dark-tertiary)',
+    padding: '2px 6px',
+    borderRadius: '8px',
+    backgroundColor: 'var(--bg-dark-secondary)',
     color: 'var(--color-gray-medium)',
     textTransform: 'uppercase' as const,
-    letterSpacing: '0.5px',
+    letterSpacing: '0.3px',
   },
   errorBanner: {
-    margin: '12px 20px 0',
-    padding: '12px 16px',
+    margin: '8px 12px 0',
+    padding: '8px 12px',
     backgroundColor: 'rgba(239, 68, 68, 0.1)',
-    border: '1px solid rgba(239, 68, 68, 0.3)',
-    borderRadius: '10px',
+    border: '1px solid rgba(239, 68, 68, 0.25)',
+    borderRadius: '8px',
     display: 'flex',
     alignItems: 'center',
     justifyContent: 'space-between',
-    fontSize: '13px',
+    fontSize: '11px',
     color: '#fca5a5',
   },
   mainContent: {
@@ -121,157 +117,158 @@ const styles = {
     flexDirection: 'column' as const,
   },
   idleSection: {
-    padding: '24px 20px',
+    padding: '12px',
     display: 'flex',
     flexDirection: 'column' as const,
-    gap: '16px',
+    gap: '10px',
   },
   detectButton: {
     width: '100%',
-    padding: '14px 20px',
+    padding: '10px 14px',
     backgroundColor: 'var(--bg-dark-secondary)',
     border: '1px solid rgba(255, 255, 255, 0.08)',
-    borderRadius: '12px',
+    borderRadius: '10px',
     color: 'var(--color-white)',
-    fontSize: '14px',
+    fontSize: '12px',
     fontWeight: 500,
     cursor: 'pointer',
     display: 'flex',
     alignItems: 'center',
     justifyContent: 'center',
-    gap: '10px',
+    gap: '8px',
     transition: 'all 0.2s ease',
   },
   meetingCard: {
-    padding: '20px',
+    padding: '12px',
     backgroundColor: 'var(--bg-dark-secondary)',
-    borderRadius: '14px',
-    border: '1px solid rgba(255, 255, 255, 0.06)',
+    borderRadius: '10px',
+    border: '1px solid rgba(255, 255, 255, 0.05)',
   },
   meetingCardHeader: {
     display: 'flex',
     alignItems: 'center',
-    gap: '10px',
-    marginBottom: '16px',
+    gap: '8px',
+    marginBottom: '10px',
   },
   liveDot: {
-    width: '10px',
-    height: '10px',
+    width: '8px',
+    height: '8px',
     borderRadius: '50%',
     backgroundColor: '#10b981',
-    boxShadow: '0 0 0 3px rgba(16, 185, 129, 0.2)',
+    boxShadow: '0 0 0 2px rgba(16, 185, 129, 0.2)',
     animation: 'pulse 2s infinite',
   },
   meetingPlatform: {
-    fontSize: '15px',
+    fontSize: '12px',
     fontWeight: 600,
     color: 'var(--color-white)',
   },
   meetingTitle: {
-    fontSize: '13px',
+    fontSize: '11px',
     color: 'var(--color-gray-medium)',
-    marginBottom: '16px',
+    marginBottom: '10px',
     display: '-webkit-box',
-    WebkitLineClamp: 2,
+    WebkitLineClamp: 1,
     WebkitBoxOrient: 'vertical' as const,
     overflow: 'hidden',
   },
   startButton: {
     width: '100%',
-    padding: '14px 20px',
+    padding: '10px 14px',
     background: 'linear-gradient(135deg, var(--color-accent) 0%, #00a88e 100%)',
     border: 'none',
-    borderRadius: '12px',
+    borderRadius: '10px',
     color: '#000',
-    fontSize: '14px',
+    fontSize: '12px',
     fontWeight: 600,
     cursor: 'pointer',
     display: 'flex',
     alignItems: 'center',
     justifyContent: 'center',
-    gap: '10px',
-    boxShadow: '0 4px 12px rgba(0, 212, 179, 0.3)',
+    gap: '8px',
+    boxShadow: '0 2px 8px rgba(0, 212, 179, 0.25)',
     transition: 'all 0.2s ease',
   },
   noMeetingText: {
     textAlign: 'center' as const,
     color: 'var(--color-gray-medium)',
-    fontSize: '14px',
-    lineHeight: 1.6,
-    padding: '20px 0',
+    fontSize: '12px',
+    lineHeight: 1.5,
+    padding: '12px 0',
   },
   controlsBar: {
-    padding: '16px 20px',
-    borderBottom: '1px solid var(--bg-dark-secondary)',
+    padding: '8px 12px',
+    borderBottom: '1px solid rgba(255, 255, 255, 0.05)',
     display: 'flex',
     alignItems: 'center',
-    gap: '10px',
+    gap: '6px',
     backgroundColor: 'var(--bg-dark-main)',
   },
   iconButton: {
-    width: '44px',
-    height: '44px',
-    borderRadius: '12px',
+    width: '36px',
+    height: '36px',
+    borderRadius: '8px',
     border: 'none',
     display: 'flex',
     alignItems: 'center',
     justifyContent: 'center',
     cursor: 'pointer',
     transition: 'all 0.2s ease',
+    flexShrink: 0,
   },
   liaButton: {
     flex: 1,
-    padding: '12px 20px',
+    padding: '10px 14px',
     background: 'linear-gradient(135deg, #8B5CF6 0%, #7C3AED 100%)',
     border: 'none',
-    borderRadius: '12px',
+    borderRadius: '8px',
     color: '#fff',
-    fontSize: '14px',
+    fontSize: '12px',
     fontWeight: 600,
     cursor: 'pointer',
     display: 'flex',
     alignItems: 'center',
     justifyContent: 'center',
-    gap: '8px',
-    boxShadow: '0 4px 12px rgba(139, 92, 246, 0.3)',
+    gap: '6px',
+    boxShadow: '0 2px 8px rgba(139, 92, 246, 0.25)',
     transition: 'all 0.2s ease',
   },
   transcriptContainer: {
     flex: 1,
     overflowY: 'auto' as const,
-    padding: '16px 20px',
+    padding: '10px 12px',
   },
   transcriptSegment: {
-    padding: '14px 16px',
-    borderRadius: '12px',
-    marginBottom: '10px',
+    padding: '10px 12px',
+    borderRadius: '8px',
+    marginBottom: '6px',
     backgroundColor: 'var(--bg-dark-secondary)',
-    border: '1px solid rgba(255, 255, 255, 0.04)',
+    border: '1px solid rgba(255, 255, 255, 0.03)',
   },
   transcriptSegmentLia: {
-    background: 'linear-gradient(135deg, rgba(139, 92, 246, 0.15) 0%, rgba(124, 58, 237, 0.1) 100%)',
-    border: '1px solid rgba(139, 92, 246, 0.2)',
+    background: 'linear-gradient(135deg, rgba(139, 92, 246, 0.12) 0%, rgba(124, 58, 237, 0.08) 100%)',
+    border: '1px solid rgba(139, 92, 246, 0.15)',
   },
   segmentHeader: {
     display: 'flex',
     alignItems: 'center',
-    gap: '8px',
-    marginBottom: '8px',
+    gap: '6px',
+    marginBottom: '4px',
   },
   speakerName: {
-    fontSize: '12px',
+    fontSize: '10px',
     fontWeight: 600,
     textTransform: 'uppercase' as const,
-    letterSpacing: '0.5px',
+    letterSpacing: '0.3px',
   },
   timestamp: {
-    fontSize: '11px',
+    fontSize: '9px',
     color: 'var(--color-gray-medium)',
     fontWeight: 400,
   },
   segmentText: {
-    fontSize: '14px',
-    lineHeight: 1.6,
+    fontSize: '12px',
+    lineHeight: 1.5,
     color: 'rgba(255, 255, 255, 0.9)',
     margin: 0,
   },
@@ -281,104 +278,143 @@ const styles = {
     flexDirection: 'column' as const,
     alignItems: 'center',
     justifyContent: 'center',
-    padding: '40px 20px',
+    padding: '24px 16px',
     textAlign: 'center' as const,
   },
   emptyIcon: {
-    width: '64px',
-    height: '64px',
-    borderRadius: '16px',
+    width: '48px',
+    height: '48px',
+    borderRadius: '12px',
     backgroundColor: 'var(--bg-dark-secondary)',
     display: 'flex',
     alignItems: 'center',
     justifyContent: 'center',
-    marginBottom: '16px',
+    marginBottom: '10px',
   },
   emptyText: {
-    fontSize: '14px',
+    fontSize: '12px',
     color: 'var(--color-gray-medium)',
     margin: 0,
   },
   endedSection: {
-    padding: '20px',
+    padding: '12px',
     overflowY: 'auto' as const,
     flex: 1,
   },
   sectionTitle: {
-    fontSize: '14px',
+    fontSize: '12px',
     fontWeight: 600,
     color: 'var(--color-white)',
-    marginBottom: '12px',
-    marginTop: '20px',
+    marginBottom: '8px',
+    marginTop: '12px',
   },
   summaryButtons: {
     display: 'flex',
     flexWrap: 'wrap' as const,
-    gap: '8px',
+    gap: '6px',
   },
   summaryButton: {
-    padding: '10px 16px',
+    padding: '8px 12px',
     backgroundColor: 'var(--bg-dark-secondary)',
-    border: '1px solid rgba(255, 255, 255, 0.08)',
-    borderRadius: '10px',
+    border: '1px solid rgba(255, 255, 255, 0.06)',
+    borderRadius: '8px',
     color: 'var(--color-white)',
-    fontSize: '13px',
+    fontSize: '11px',
     fontWeight: 500,
     cursor: 'pointer',
     transition: 'all 0.2s ease',
   },
   summaryCard: {
-    padding: '16px',
+    padding: '10px',
     backgroundColor: 'var(--bg-dark-secondary)',
-    borderRadius: '12px',
-    border: '1px solid rgba(0, 212, 179, 0.2)',
-    marginTop: '16px',
-    maxHeight: '200px',
+    borderRadius: '8px',
+    border: '1px solid rgba(0, 212, 179, 0.15)',
+    marginTop: '10px',
+    maxHeight: '150px',
     overflowY: 'auto' as const,
   },
   summaryLabel: {
-    fontSize: '12px',
+    fontSize: '10px',
     fontWeight: 600,
     color: 'var(--color-accent)',
-    marginBottom: '8px',
+    marginBottom: '6px',
     textTransform: 'uppercase' as const,
-    letterSpacing: '0.5px',
+    letterSpacing: '0.3px',
   },
   summaryText: {
-    fontSize: '14px',
-    lineHeight: 1.6,
+    fontSize: '12px',
+    lineHeight: 1.5,
     color: 'rgba(255, 255, 255, 0.85)',
     whiteSpace: 'pre-wrap' as const,
     margin: 0,
   },
   exportButton: {
     width: '100%',
-    padding: '14px 20px',
+    padding: '10px 14px',
     background: 'linear-gradient(135deg, var(--color-accent) 0%, #00a88e 100%)',
     border: 'none',
-    borderRadius: '12px',
+    borderRadius: '8px',
     color: '#000',
-    fontSize: '14px',
+    fontSize: '12px',
     fontWeight: 600,
     cursor: 'pointer',
     display: 'flex',
     alignItems: 'center',
     justifyContent: 'center',
-    gap: '10px',
-    marginTop: '20px',
-    boxShadow: '0 4px 12px rgba(0, 212, 179, 0.3)',
+    gap: '8px',
+    marginTop: '12px',
+    boxShadow: '0 2px 8px rgba(0, 212, 179, 0.25)',
   },
   newMeetingButton: {
     width: '100%',
-    padding: '14px 20px',
+    padding: '10px 14px',
     backgroundColor: 'var(--bg-dark-secondary)',
-    border: '1px solid rgba(255, 255, 255, 0.08)',
-    borderRadius: '12px',
+    border: '1px solid rgba(255, 255, 255, 0.06)',
+    borderRadius: '8px',
     color: 'var(--color-white)',
-    fontSize: '14px',
+    fontSize: '12px',
     fontWeight: 500,
     cursor: 'pointer',
-    marginTop: '10px',
+    marginTop: '8px',
+  },
+  processingIndicator: {
+    display: 'flex',
+    alignItems: 'center',
+    gap: '6px',
+    padding: '4px 8px',
+    backgroundColor: 'rgba(251, 191, 36, 0.08)',
+    border: '1px solid rgba(251, 191, 36, 0.2)',
+    borderRadius: '6px',
+    fontSize: '10px',
+    color: '#fbbf24',
+  },
+  vadIndicator: {
+    display: 'flex',
+    alignItems: 'center',
+    gap: '4px',
+    padding: '4px 8px',
+    backgroundColor: 'rgba(16, 185, 129, 0.08)',
+    border: '1px solid rgba(16, 185, 129, 0.15)',
+    borderRadius: '6px',
+    fontSize: '10px',
+    fontWeight: 500,
+  },
+  confidenceBadge: {
+    display: 'inline-flex',
+    alignItems: 'center',
+    gap: '3px',
+    padding: '2px 5px',
+    backgroundColor: 'rgba(16, 185, 129, 0.12)',
+    border: '1px solid rgba(16, 185, 129, 0.2)',
+    borderRadius: '4px',
+    fontSize: '9px',
+    fontWeight: 600,
+    color: '#10b981',
+  },
+  speakerBadge: {
+    display: 'inline-flex',
+    alignItems: 'center',
+    gap: '3px',
   },
 };
 
@@ -489,6 +525,11 @@ export const MeetingPanel: React.FC<MeetingPanelProps> = ({ userId, onClose }) =
   const [error, setError] = useState<string>('');
   const [isMicMuted, setIsMicMuted] = useState(false);
 
+  // UX enhancement states
+  const [isProcessingAudio, setIsProcessingAudio] = useState(false);
+  const [vadActive, setVadActive] = useState(false);
+  const [currentSpeaker, setCurrentSpeaker] = useState<string | null>(null);
+
   // Refs
   const meetingManagerRef = useRef<MeetingManager | null>(null);
   const transcriptEndRef = useRef<HTMLDivElement>(null);
@@ -572,6 +613,14 @@ export const MeetingPanel: React.FC<MeetingPanelProps> = ({ userId, onClose }) =
   const meetingCallbacks: MeetingCallbacks = {
     onTranscriptUpdate: (segment) => {
       setTranscript((prev) => [...prev, segment]);
+
+      // Update current speaker if present
+      if (segment.speaker && !segment.isLiaResponse) {
+        setCurrentSpeaker(segment.speaker);
+      }
+
+      // Reset processing indicator after transcript update
+      setIsProcessingAudio(false);
     },
     onLiaResponse: (text, _audioData) => {
       if (text) {
@@ -590,13 +639,27 @@ export const MeetingPanel: React.FC<MeetingPanelProps> = ({ userId, onClose }) =
     },
     onStatusChange: (newStatus) => {
       setStatus(newStatus);
+
+      // Track processing state
+      if (newStatus === 'transcribing') {
+        setIsProcessingAudio(true);
+        setVadActive(true);
+      } else if (newStatus === 'ended' || newStatus === 'error') {
+        setIsProcessingAudio(false);
+        setVadActive(false);
+        setCurrentSpeaker(null);
+      }
     },
     onError: (err) => {
       setError(err.message);
+      setIsProcessingAudio(false);
       console.error('Meeting error:', err);
     },
     onSessionEnd: (endedSession) => {
       setSession(endedSession);
+      setIsProcessingAudio(false);
+      setVadActive(false);
+      setCurrentSpeaker(null);
     },
   };
 
@@ -786,19 +849,36 @@ export const MeetingPanel: React.FC<MeetingPanelProps> = ({ userId, onClose }) =
         }
       `}</style>
 
-      {/* Header */}
+      {/* Compact Header - Integrates title + status inline */}
       <div style={styles.header}>
         <div style={styles.headerTitle}>
           <div style={styles.headerIcon}>
             <VideoIcon />
           </div>
-          <h2 style={styles.title}>Agente de Reuniones</h2>
+          <span style={styles.title}>Reuniones</span>
+          
+          {/* Status inline */}
+          <div style={styles.statusIndicator}>
+            <div
+              style={{
+                ...styles.statusDot,
+                backgroundColor: currentStatus.color,
+                boxShadow: `0 0 0 2px ${currentStatus.bgColor}`,
+                animation: (status === 'transcribing' || status === 'reconnecting' || status === 'connecting') ? 'pulse 1.5s infinite' : 'none',
+              }}
+            />
+            <span className="hide-text-on-compact" style={{ color: currentStatus.color }}>{currentStatus.text}</span>
+          </div>
+          
+          {/* Platform badge inline */}
+          {session && <span className="hide-text-on-compact" style={styles.platformBadge}>{session.platform === 'google-meet' ? 'MEET' : 'ZOOM'}</span>}
         </div>
+        
         {onClose && (
           <button
             style={styles.closeButton}
             onClick={onClose}
-            onMouseEnter={(e) => (e.currentTarget.style.backgroundColor = 'var(--bg-dark-secondary)')}
+            onMouseEnter={(e) => (e.currentTarget.style.backgroundColor = 'rgba(255,255,255,0.05)')}
             onMouseLeave={(e) => (e.currentTarget.style.backgroundColor = 'transparent')}
           >
             <CloseIcon />
@@ -806,28 +886,58 @@ export const MeetingPanel: React.FC<MeetingPanelProps> = ({ userId, onClose }) =
         )}
       </div>
 
-      {/* Status Bar */}
-      <div style={styles.statusBar}>
-        <div style={{ ...styles.statusIndicator, flexDirection: 'column', alignItems: 'flex-start', gap: '4px' }}>
-          <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
-            <div
-              style={{
-                ...styles.statusDot,
-                backgroundColor: currentStatus.color,
-                boxShadow: `0 0 0 3px ${currentStatus.bgColor}`,
-                animation: (status === 'transcribing' || status === 'reconnecting' || status === 'connecting') ? 'pulse 1.5s infinite' : 'none',
-              }}
-            />
-            <span style={{ ...styles.statusText, color: currentStatus.color }}>{currentStatus.text}</span>
-          </div>
-          {currentStatus.description && (status === 'connecting' || status === 'reconnecting') && (
-            <span style={{ fontSize: '11px', color: 'var(--color-gray-medium)', marginLeft: '16px' }}>
-              {currentStatus.description}
-            </span>
+      {/* Enhanced UX Indicators */}
+      {status === 'transcribing' && (
+        <div style={{ padding: '6px 12px', backgroundColor: 'var(--bg-dark-main)', borderBottom: '1px solid rgba(255, 255, 255, 0.04)', display: 'flex', gap: '8px', flexWrap: 'wrap', alignItems: 'center' }}>
+          {/* VAD Indicator */}
+          {vadActive && (
+            <div style={{
+              ...styles.vadIndicator,
+              borderColor: vadActive ? 'rgba(16, 185, 129, 0.3)' : 'rgba(107, 114, 128, 0.2)',
+              backgroundColor: vadActive ? 'rgba(16, 185, 129, 0.08)' : 'rgba(107, 114, 128, 0.08)',
+            }}>
+              <div style={{
+                width: '5px',
+                height: '5px',
+                borderRadius: '50%',
+                backgroundColor: vadActive ? '#10b981' : '#6b7280',
+                animation: vadActive ? 'pulse 1.5s infinite' : 'none',
+              }} />
+              <span style={{ color: vadActive ? '#10b981' : '#6b7280' }}>
+                Voz
+              </span>
+            </div>
+          )}
+
+          {/* Current Speaker - more compact */}
+          {currentSpeaker && (
+            <div style={{
+              ...styles.vadIndicator,
+              borderColor: 'rgba(0, 212, 179, 0.3)',
+              backgroundColor: 'rgba(0, 212, 179, 0.08)',
+            }}>
+              <span style={{ color: 'var(--color-accent)', fontWeight: 500 }}>
+                {currentSpeaker}
+              </span>
+            </div>
+          )}
+
+          {/* Processing - compact */}
+          {isProcessingAudio && (
+            <div style={styles.processingIndicator}>
+              <div style={{
+                width: '8px',
+                height: '8px',
+                border: '1.5px solid #fbbf24',
+                borderTopColor: 'transparent',
+                borderRadius: '50%',
+                animation: 'spin 0.8s linear infinite',
+              }} />
+              <span>Procesando...</span>
+            </div>
           )}
         </div>
-        {session && <span style={styles.platformBadge}>{session.platform === 'google-meet' ? 'Meet' : 'Zoom'}</span>}
-      </div>
+      )}
 
       {/* Error Banner */}
       {error && (

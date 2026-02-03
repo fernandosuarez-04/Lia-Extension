@@ -1,5 +1,5 @@
 import React, { createContext, useState, useEffect, useContext } from 'react';
-import { Session } from '@supabase/supabase-js';
+import type { Session, AuthChangeEvent } from '@supabase/supabase-js';
 import { supabase } from '../lib/supabase';
 import { isSofiaConfigured } from '../lib/sofia-client';
 import { sofiaAuth, SofiaContext, SofiaAuthResult, SofiaAuthUser } from '../services/sofia-auth';
@@ -134,7 +134,7 @@ export const AuthProvider = ({ children }: { children: React.ReactNode }) => {
       unsubscribe = subscription.unsubscribe;
     } else {
       const { data: { subscription } } = supabase.auth.onAuthStateChange(
-        (_event, session) => {
+        (_event: AuthChangeEvent, session: Session | null) => {
           console.log('Auth state changed:', _event);
           setSession(session);
           // Convertir User de Supabase a nuestro tipo

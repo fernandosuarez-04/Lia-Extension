@@ -1,27 +1,5 @@
 {
   "manifest_version": 3,
-<<<<<<< HEAD
-  "name": "Lia Extension",
-  "version": "1.0.0",
-  "description": "Herramienta de productividad para Ecos de Liderazgo",
-  "permissions": [
-    "activeTab",
-    "storage",
-    "sidePanel"
-  ],
-  "side_panel": {
-    "default_path": "src/sidepanel/index.html"
-  },
-  "action": {
-    "default_title": "Abrir Lia AI",
-
-    "default_icon": {
-      "16": "assets/icon16.png",
-      "48": "assets/icon48.png",
-      "128": "assets/icon128.png"
-    }
-  },
-=======
   "name": "SOFLIA Agent",
   "version": "7.0.0",
   "description": "Agente inteligente del ecosistema SOFLIA",
@@ -47,7 +25,6 @@
   "side_panel": {
     "default_path": "src/popup/index.html"
   },
->>>>>>> 53efaec9f820dc2b09e721ef6309e86720663a96
   "background": {
     "service_worker": "assets/background.js",
     "type": "module"
@@ -59,16 +36,6 @@
       ],
       "js": [
         "assets/content.js"
-<<<<<<< HEAD
-      ]
-    }
-  ],
-  "icons": {
-    "16": "assets/icon16.png",
-    "48": "assets/icon48.png",
-    "128": "assets/icon128.png"
-  }
-=======
       ],
       "run_at": "document_idle",
       "all_frames": false
@@ -85,5 +52,4 @@
       "matches": ["<all_urls>"]
     }
   ]
->>>>>>> 53efaec9f820dc2b09e721ef6309e86720663a96
 }
