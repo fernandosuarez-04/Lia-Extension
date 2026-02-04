@@ -16,6 +16,19 @@ let captionScraper: MeetCaptionScraper | null = null;
 let autoDetectRunning = false;
 let ccEnableRetryId: ReturnType<typeof setInterval> | null = null;
 
+// Debounce: don't click the CC button more than once every 5 s.
+// Multiple content-script instances (extension reload while tab lives) used to
+// click it every few hundred ms, toggling CC on/off rapidly.
+let _lastCCClickTime = 0;
+const _CC_DEBOUNCE_MS = 5000;
+
+// chrome.runtime.sendMessage can throw synchronously when the extension context
+// is invalidated (e.g. after extension reload while the tab stays open).
+// .catch() does not protect against that, so wrap every fire-and-forget send here.
+function safeSend(msg: object): void {
+  try { chrome.runtime.sendMessage(msg).catch(() => {}); } catch { /* context invalidated */ }
+}
+
 /**
  * Start speaker detection for Google Meet
  */
@@ -40,13 +53,11 @@ function startSpeakerDetection(): void {
       console.log('SOFLIA: Speaker changed to:', currentActiveSpeaker);
 
       // Notify popup/background about speaker change
-      chrome.runtime.sendMessage({
+      safeSend({
         type: 'SPEAKER_CHANGED',
         speaker: event.currentSpeaker,
         previousSpeaker: event.previousSpeaker,
         timestamp: event.timestamp
-      }).catch(() => {
-        // Ignore errors if no listener
       });
     },
     onParticipantsUpdate: (participants: MeetParticipant[]) => {
@@ -54,11 +65,9 @@ function startSpeakerDetection(): void {
       console.log('SOFLIA: Participants updated:', participants.map(p => p.name));
 
       // Notify popup/background about participants
-      chrome.runtime.sendMessage({
+      safeSend({
         type: 'PARTICIPANTS_UPDATED',
         participants: participants
-      }).catch(() => {
-        // Ignore errors if no listener
       });
     }
   });
@@ -71,12 +80,12 @@ function startSpeakerDetection(): void {
     captionScraper = new MeetCaptionScraper();
     captionScraper.start((entry) => {
       console.log('SOFLIA: CC Caption received —', entry.speaker, ':', entry.text);
-      chrome.runtime.sendMessage({
+      safeSend({
         type: 'CAPTION_RECEIVED',
         speaker: entry.speaker,
         text: entry.text,
         timestamp: entry.timestamp
-      }).catch(() => {});
+      });
     });
     console.log('SOFLIA: CC caption scraper started (manual)');
   }
@@ -117,7 +126,13 @@ function enableCCCaptions(): void {
     }
   }
 
-  // ── 3. Find and click the CC button (only if CC appears to be off) ──
+  // ── 3. Debounce guard — never click CC more often than _CC_DEBOUNCE_MS ──
+  if (Date.now() - _lastCCClickTime < _CC_DEBOUNCE_MS) {
+    console.log('SOFLIA: CC click debounce — skipping');
+    return;
+  }
+
+  // ── 4. Find and click the CC button (only if CC appears to be off) ──
   const ccSelectors = [
     'button[aria-label*="subtítulo" i]',
     'button[aria-label*="subtitle" i]',
@@ -143,6 +158,7 @@ function enableCCCaptions(): void {
       }
 
       btn.click();
+      _lastCCClickTime = Date.now();
       console.log('SOFLIA: CC captions auto-enabled via selector:', sel);
       return;
     } catch { /* skip invalid selector */ }
@@ -155,6 +171,7 @@ function enableCCCaptions(): void {
     const ariaLabel = btn.getAttribute('aria-label') || '';
     if (text === 'CC' || ariaLabel.toLowerCase().includes('caption') || ariaLabel.toLowerCase().includes('subtítulo')) {
       btn.click();
+      _lastCCClickTime = Date.now();
       console.log('SOFLIA: CC captions auto-enabled via text/aria fallback');
       return;
     }
@@ -173,11 +190,85 @@ function hideCCCaptions(): void {
   const root = captionScraper.getCaptionRoot() as HTMLElement | null;
   if (!root) return; // container not found yet — retry will call us again
 
-  if (root.style.opacity === '0') return; // already hidden
+  if (root.style.clipPath === 'inset(100%)') return; // already hidden
 
-  root.style.setProperty('opacity', '0', 'important');
-  root.style.setProperty('pointer-events', 'none', 'important');
-  console.log('SOFLIA: CC caption container hidden');
+  // Safety guard: the Meet call-control toolbar is also in the lower viewport.
+  // If this element contains >2 buttons it is the toolbar — exclude and retry.
+  const buttons = root.querySelectorAll('button');
+  if (buttons.length > 2) {
+    console.log('SOFLIA: Safety — caption root has', buttons.length, 'buttons; wrong element, resetting');
+    captionScraper.resetContainer();
+    return;
+  }
+
+  // Hide the caption text container itself
+  hideEl(root);
+
+  // The CC overlay in Meet has a parent wrapper that also contains the
+  // language / controls bar ("Español (México)" + font-size + gear).
+  // Walk up 1-3 levels and hide any small ancestor still in the lower viewport
+  // — but ONLY if it does NOT contain the main call-control buttons (>2 buttons).
+  let parent = root.parentElement;
+  for (let i = 0; i < 3 && parent; i++, parent = parent.parentElement) {
+    const rect = parent.getBoundingClientRect();
+    // Stop if we've left the lower-third or the element is too large
+    if (rect.top < window.innerHeight * 0.45) break;
+    if (rect.height > window.innerHeight * 0.4) break;
+    // Never touch the call toolbar
+    if (parent.querySelectorAll('button').length > 3) break;
+    hideEl(parent);
+    console.log('SOFLIA: Also hid CC parent wrapper (depth', i + 1, ')');
+  }
+
+  // Second approach: directly find and hide the CC controls bar that shows
+  // the language selector — it has a <span> with "Español" or "English" etc.
+  // and sits in the lower viewport. This catches it even if it's not a parent.
+  const langSelectors = [
+    'span[data-lang-code]',                        // some Meet versions
+    '[data-tooltip*="idioma" i]',
+    '[data-tooltip*="language" i]',
+  ];
+  for (const sel of langSelectors) {
+    try {
+      const el = document.querySelector(sel) as HTMLElement | null;
+      if (el) {
+        // Walk up to find the controls bar (small, lower viewport)
+        let bar: HTMLElement | null = el;
+        for (let i = 0; i < 5 && bar; i++) {
+          const r = bar.getBoundingClientRect();
+          if (r.top > window.innerHeight * 0.45 && r.height < window.innerHeight * 0.15
+              && bar.querySelectorAll('button').length <= 3) {
+            hideEl(bar);
+            console.log('SOFLIA: Hid CC controls bar via lang selector');
+            break;
+          }
+          bar = bar.parentElement;
+        }
+      }
+    } catch { /* skip */ }
+  }
+
+  console.log('SOFLIA: CC caption overlay hidden');
+}
+
+/**
+ * Hide an element visually WITHOUT triggering Meet's "CC was turned off" detector.
+ * Meet watches for opacity → 0 and visibility:hidden on the caption container.
+ * clip-path collapses the visible area to zero; height/overflow collapse the space.
+ * The element stays in the DOM with display/visibility intact → MutationObserver keeps firing.
+ */
+function hideEl(el: HTMLElement): void {
+  el.style.setProperty('clip-path', 'inset(100%)', 'important');
+  el.style.setProperty('pointer-events', 'none', 'important');
+  // Collapse the space the CC bar/caption area occupied
+  el.style.setProperty('height', '0px', 'important');
+  el.style.setProperty('min-height', '0px', 'important');
+  el.style.setProperty('max-height', '0px', 'important');
+  el.style.setProperty('overflow', 'hidden', 'important');
+  el.style.setProperty('padding', '0px', 'important');
+  el.style.setProperty('margin', '0px', 'important');
+  el.style.setProperty('border', '0px', 'important');
+  el.style.setProperty('transition', 'none', 'important');
 }
 
 /**
@@ -201,22 +292,22 @@ function autoDetectAndStartCaptions(): void {
   console.log('SOFLIA: [AUTO] Meeting detected — starting silent transcription');
 
   // Notify background (it will buffer captions + relay to popup)
-  chrome.runtime.sendMessage({
+  safeSend({
     type: 'MEETING_AUTO_DETECTED',
     platform,
     title: meetingInfo.title,
     url: window.location.href
-  }).catch(() => {});
+  });
 
   // Start caption scraper
   captionScraper = new MeetCaptionScraper();
   captionScraper.start((entry) => {
-    chrome.runtime.sendMessage({
+    safeSend({
       type: 'CAPTION_RECEIVED',
       speaker: entry.speaker,
       text: entry.text,
       timestamp: entry.timestamp
-    }).catch(() => {});
+    });
   });
   console.log('SOFLIA: [AUTO] Caption scraper started');
 
@@ -249,7 +340,7 @@ function onNavigationAway(): void {
   if (platform === 'google-meet') return; // still in a meeting
 
   console.log('SOFLIA: [AUTO] Navigated away from meeting');
-  chrome.runtime.sendMessage({ type: 'MEETING_ENDED' }).catch(() => {});
+  safeSend({ type: 'MEETING_ENDED' });
 
   // Stop scraper + cleanup
   if (captionScraper) { captionScraper.stop(); captionScraper = null; }
@@ -1264,17 +1355,11 @@ function handleButtonClick(action: string) {
   console.log('Sending to Lia:', prompt.substring(0, 100) + '...');
   
   // Send to extension background
-  chrome.runtime.sendMessage({
+  safeSend({
     type: 'SELECTION_ACTION',
     action: action,
     text: currentSelection,
     prompt: prompt
-  }, (response) => {
-    if (chrome.runtime.lastError) {
-      console.error('Error sending message:', chrome.runtime.lastError);
-    } else {
-      console.log('Message sent successfully:', response);
-    }
   });
   
   hideSelectionPopup();
@@ -1442,12 +1527,7 @@ document.addEventListener('mouseup', (e) => {
       
       try {
         // Send selection immediately to background/popup
-        chrome.runtime.sendMessage({
-          type: 'TEXT_SELECTED',
-          text: currentSelection
-        }).catch(() => {
-          // Ignore errors if background is not ready
-        });
+        safeSend({ type: 'TEXT_SELECTED', text: currentSelection });
 
         const range = selection?.getRangeAt(0);
         if (range) {
@@ -1635,37 +1715,47 @@ chrome.runtime.onMessage.addListener((request, _sender, sendResponse) => {
 // content script loads — no user click needed.
 // ============================================
 
-// 1. Try immediately + on DOMContentLoaded/load
-autoDetectAndStartCaptions();
-if (document.readyState !== 'complete') {
-  window.addEventListener('load', () => setTimeout(autoDetectAndStartCaptions, 1500));
-}
+// Singleton guard: when the extension is reloaded while a Meet tab stays open
+// Chrome injects a NEW content script without fully killing the old one.
+// Both instances share `window`, so we use a flag to let only ONE run the
+// auto-detect + CC-click logic.  The message listener above works on every
+// instance (Chrome routes messages to all), but that is harmless.
+if (!(window as any).__SOFLIA_CC_OWNER__) {
+  (window as any).__SOFLIA_CC_OWNER__ = true;
 
-// 2. Retry every 3 s for 90 s — covers slow Meet renders and delayed joins
-let _autoRetries = 0;
-const _autoRetryInterval = setInterval(() => {
-  _autoRetries++;
-  if (_autoRetries > 30 || captionScraper) {
-    clearInterval(_autoRetryInterval);
-    return;
-  }
+  // 1. Try immediately + on DOMContentLoaded/load
   autoDetectAndStartCaptions();
-}, 3000);
+  if (document.readyState !== 'complete') {
+    window.addEventListener('load', () => setTimeout(autoDetectAndStartCaptions, 1500));
+  }
 
-// 3. Watch for SPA navigations inside Meet (pushState / popstate)
-//    Meet is a single-page app — URL changes without full reloads.
-const _origPush = history.pushState;
-history.pushState = function (data: any, title: string, url?: string | URL | null) {
-  _origPush.call(this, data, title, url);
-  // Small delay so the new page content renders before we check
-  setTimeout(() => {
+  // 2. Retry every 3 s for 90 s — covers slow Meet renders and delayed joins
+  let _autoRetries = 0;
+  const _autoRetryInterval = setInterval(() => {
+    _autoRetries++;
+    if (_autoRetries > 30 || captionScraper) {
+      clearInterval(_autoRetryInterval);
+      return;
+    }
     autoDetectAndStartCaptions();
-    onNavigationAway();
-  }, 1000);
-};
-window.addEventListener('popstate', () => {
-  setTimeout(() => {
-    autoDetectAndStartCaptions();
-    onNavigationAway();
-  }, 1000);
-});
+  }, 3000);
+  // 3. Watch for SPA navigations inside Meet (pushState / popstate)
+  //    Meet is a single-page app — URL changes without full reloads.
+  //    Only the owner instance patches pushState; avoids stacking callbacks.
+  const _origPush = history.pushState;
+  history.pushState = function (data: any, title: string, url?: string | URL | null) {
+    _origPush.call(this, data, title, url);
+    setTimeout(() => {
+      autoDetectAndStartCaptions();
+      onNavigationAway();
+    }, 1000);
+  };
+  window.addEventListener('popstate', () => {
+    setTimeout(() => {
+      autoDetectAndStartCaptions();
+      onNavigationAway();
+    }, 1000);
+  });
+} else {
+  console.log('SOFLIA: Duplicate content script — auto-detect skipped (another instance owns CC)');
+}
