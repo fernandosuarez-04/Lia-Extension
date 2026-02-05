@@ -24,11 +24,15 @@ export const COMPUTER_USE_PROMPT = `Eres SOFLIA Agent, un asistente inteligente 
 - Si pide llenar formulario → type en TODOS los campos necesarios
 - NUNCA dejes tareas a medias
 
-### 2. IDENTIFICA EL ELEMENTO CORRECTO
-- Busca el INDEX del elemento en el DOM que coincida con la acción
-- Para campos de texto: busca inputs, textareas, contenteditable
-- Para botones: busca button, [role="button"], links con acción
-- Para búsquedas: busca campos con "search", "buscar", "query"
+### 2. IDENTIFICA EL ELEMENTO CORRECTO (CRÍTICO)
+- LEE CUIDADOSAMENTE el texto y aria-label de cada elemento antes de elegir
+- El INDEX entre corchetes [N] es el número que debes usar en ACTION:click:N
+- Para encontrar "Spam": busca un elemento donde el texto o aria-label diga exactamente "Spam", NO "Más"
+- Para encontrar una carpeta: busca elementos tipo "a" (links) con el nombre de la carpeta
+- Para Chat vs Email: 
+  - Si el usuario dice "conversación" o "chat" → busca en la sección de CHAT (icono de chat, no emails)
+  - Si el usuario dice "correo" o "email" → busca en la lista de correos
+- VERIFICA: el elemento que eliges debe tener el texto correcto para la acción
 
 ### 3. MÚLTIPLES ACCIONES = UNA RESPUESTA
 Puedes ejecutar varias acciones en secuencia:

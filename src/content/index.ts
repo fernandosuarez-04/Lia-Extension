@@ -1,5 +1,28 @@
 console.log('SOFLIA Content Script loaded');
 
+// ============================================
+// IMPORTS
+// ============================================
+
+import {
+  isGoogleMeetUrl,
+  isMeetingActive,
+  enableClosedCaptions,
+  findCaptionContainer,
+  hideCaptionsVisually,
+  getParticipants,
+  getMeetingInfo
+} from '../services/meet-detector';
+
+import {
+  MeetCaptionObserver,
+  CaptionEntry
+} from '../services/meet-transcription';
+
+// ============================================
+// UTILITIES
+// ============================================
+
 // chrome.runtime.sendMessage can throw synchronously when the extension context
 // is invalidated (e.g. after extension reload while the tab stays open).
 // .catch() does not protect against that, so wrap every fire-and-forget send here.
@@ -521,7 +544,7 @@ function getStructuredDOM(): object {
   const interactiveElements: any[] = [];
   let elementIndex = 0; // Índice real que usaremos
 
-  // Selectores más específicos - excluimos [tabindex] genérico
+  // Selectores más específicos - incluye navegación de Gmail/Google
   const selectors = [
     'a[href]',
     'button',
@@ -539,10 +562,18 @@ function getStructuredDOM(): object {
     '[role="checkbox"]',
     '[role="radio"]',
     '[role="switch"]',
+    '[role="treeitem"]',
+    '[role="listitem"]',
+    '[role="navigation"] *[aria-label]',
     '[onclick]',
+    // Gmail-specific: iconos de navegación con tooltips
+    '[data-tooltip]',
+    '[aria-label]',
     // Solo tabindex en elementos que tienen texto o aria-label
     'div[tabindex]:not(:empty)',
-    'span[tabindex]:not(:empty)'
+    'span[tabindex]:not(:empty)',
+    // Elementos con jsaction (Gmail/Google apps)
+    '[jsaction]'
   ];
 
   const elements = document.querySelectorAll(selectors.join(','));
@@ -640,7 +671,7 @@ function getStructuredDOM(): object {
       height: window.innerHeight,
       scrollY: window.scrollY
     },
-    interactiveElements: interactiveElements.slice(0, 200),
+    interactiveElements: interactiveElements.slice(0, 400),
     headings: Array.from(document.querySelectorAll('h1, h2, h3')).map(h => ({
       level: h.tagName,
       text: h.textContent?.trim().substring(0, 100)
@@ -662,16 +693,77 @@ function executeAction(action: { type: string; selector?: string; value?: string
 
     if (action.selector) {
       element = document.querySelector(action.selector);
-      console.log('Buscando por selector:', action.selector, '-> encontrado:', !!element);
+      console.log('Buscando por selector:', action.selector, '->' ,'encontrado:', !!element);
     } else if (typeof action.index === 'number') {
-      // IMPORTANTE: Estos selectores DEBEN coincidir con los de getStructuredDOM()
-      const selectors = 'a[href], button, input, select, textarea, [contenteditable="true"], [contenteditable=""], [role="textbox"], [role="button"], [role="link"], [role="tab"], [role="menuitem"], [onclick], [tabindex]';
-      const elements = document.querySelectorAll(selectors);
-      console.log(`Total elementos interactivos: ${elements.length}`);
-      element = elements[action.index] || null;
+      // IMPORTANTE: Usar EXACTAMENTE la misma lógica que getStructuredDOM()
+      const selectors = [
+        'a[href]',
+        'button',
+        'input',
+        'select',
+        'textarea',
+        '[contenteditable="true"]',
+        '[contenteditable=""]',
+        '[role="textbox"]',
+        '[role="button"]',
+        '[role="link"]',
+        '[role="tab"]',
+        '[role="menuitem"]',
+        '[role="option"]',
+        '[role="checkbox"]',
+        '[role="radio"]',
+        '[role="switch"]',
+        '[role="treeitem"]',
+        '[role="listitem"]',
+        '[role="navigation"] *[aria-label]',
+        '[onclick]',
+        '[data-tooltip]',
+        '[aria-label]',
+        'div[tabindex]:not(:empty)',
+        'span[tabindex]:not(:empty)',
+        '[jsaction]'
+      ];
+      
+      const allElements = document.querySelectorAll(selectors.join(','));
+      const filteredElements: Element[] = [];
+      const seen = new Set<Element>();
+      
+      // Aplicar EXACTAMENTE los mismos filtros que getStructuredDOM
+      allElements.forEach((el) => {
+        if (seen.has(el)) return;
+        seen.add(el);
+        
+        const rect = el.getBoundingClientRect();
+        if (rect.width === 0 && rect.height === 0) return;
+        if (rect.width < 5 || rect.height < 5) return;
+        if (window.getComputedStyle(el).display === 'none') return;
+        if (window.getComputedStyle(el).visibility === 'hidden') return;
+        if (window.getComputedStyle(el).opacity === '0') return;
+        
+        const text = el.textContent?.trim() || '';
+        const ariaLabel = el.getAttribute('aria-label') || '';
+        const title = el.getAttribute('title') || '';
+        const dataTooltip = el.getAttribute('data-tooltip') || '';
+        
+        const isFormField = el.tagName === 'INPUT' || el.tagName === 'TEXTAREA' || el.tagName === 'SELECT';
+        const isLink = el.tagName === 'A';
+        const isButton = el.tagName === 'BUTTON' || el.getAttribute('role') === 'button';
+        
+        if (!isFormField && !isLink && !isButton) {
+          const hasContent = text.length > 0 || ariaLabel.length > 0 || title.length > 0 || dataTooltip.length > 0;
+          if (!hasContent) return;
+        }
+        
+        filteredElements.push(el);
+      });
+      
+      console.log(`Total elementos interactivos (filtrados): ${filteredElements.length}`);
+      element = filteredElements[action.index] || null;
       console.log(`Elemento en índice ${action.index}:`, element);
       if (element) {
-        console.log('Tag:', element.tagName, 'Text:', element.textContent?.substring(0, 50));
+        const text = element.textContent?.substring(0, 80) || '';
+        const ariaLabel = element.getAttribute('aria-label') || '';
+        console.log('Tag:', element.tagName, 'Text:', text, 'AriaLabel:', ariaLabel);
       }
     }
 
@@ -1141,6 +1233,26 @@ chrome.runtime.onMessage.addListener((request, _sender, sendResponse) => {
       );
       break;
 
+    // ============================================
+    // GOOGLE MEET HANDLERS
+    // ============================================
+
+    case 'startMeetTranscription':
+      console.log('SOFLIA: Starting Meet transcription...');
+      startMeetTranscriptionFromMessage();
+      sendResponse({ success: true });
+      break;
+
+    case 'stopMeetTranscription':
+      console.log('SOFLIA: Stopping Meet transcription...');
+      stopMeetTranscriptionFromMessage();
+      sendResponse({ success: true });
+      break;
+
+    case 'getMeetingInfo':
+      sendResponse(getMeetingInfo());
+      break;
+
     default:
       console.log('Acción no reconocida:', request.action);
       sendResponse({ error: 'Acción no reconocida' });
@@ -1148,3 +1260,269 @@ chrome.runtime.onMessage.addListener((request, _sender, sendResponse) => {
 
   return true;
 });
+
+// ============================================
+// GOOGLE MEET AUTO-DETECTION & TRANSCRIPTION
+// ============================================
+
+// State
+let meetCaptionObserver: MeetCaptionObserver | null = null;
+let meetAutoDetectRunning = false;
+let ccEnableRetryInterval: ReturnType<typeof setInterval> | null = null;
+let participantUpdateInterval: ReturnType<typeof setInterval> | null = null;
+
+/**
+ * Start Meet transcription from message handler
+ */
+function startMeetTranscriptionFromMessage(): void {
+  if (meetCaptionObserver) {
+    console.log('SOFLIA Meet: Transcription already running');
+    return;
+  }
+  startMeetTranscription();
+}
+
+/**
+ * Stop Meet transcription from message handler
+ */
+function stopMeetTranscriptionFromMessage(): void {
+  stopMeetTranscription();
+}
+
+/**
+ * Start the Meet transcription system
+ */
+function startMeetTranscription(): void {
+  console.log('SOFLIA Meet: Starting transcription...');
+
+  // Notify background about meeting detection
+  safeSend({
+    type: 'MEETING_DETECTED',
+    url: window.location.href,
+    title: getMeetingInfo().title
+  });
+
+  // 1. Enable CC with retry
+  enableCCWithRetry();
+
+  // 2. Start caption observer
+  meetCaptionObserver = new MeetCaptionObserver();
+  meetCaptionObserver.start((entry: CaptionEntry) => {
+    console.log('SOFLIA Meet Caption:', entry.speaker, '-', entry.text);
+
+    safeSend({
+      type: 'CAPTION_RECEIVED',
+      speaker: entry.speaker,
+      text: entry.text,
+      timestamp: entry.timestamp
+    });
+  });
+
+  // 3. Periodically update participants
+  participantUpdateInterval = setInterval(() => {
+    const participants = getParticipants();
+    safeSend({
+      type: 'PARTICIPANTS_UPDATED',
+      participants
+    });
+  }, 5000);
+
+  console.log('SOFLIA Meet: Transcription started');
+}
+
+/**
+ * Stop the Meet transcription system
+ */
+function stopMeetTranscription(): void {
+  console.log('SOFLIA Meet: Stopping transcription...');
+
+  if (meetCaptionObserver) {
+    meetCaptionObserver.stop();
+    meetCaptionObserver = null;
+  }
+
+  if (ccEnableRetryInterval) {
+    clearInterval(ccEnableRetryInterval);
+    ccEnableRetryInterval = null;
+  }
+
+  if (participantUpdateInterval) {
+    clearInterval(participantUpdateInterval);
+    participantUpdateInterval = null;
+  }
+
+  safeSend({ type: 'MEETING_ENDED' });
+  console.log('SOFLIA Meet: Transcription stopped');
+}
+
+/**
+ * Enable CC with retry logic (limited retries)
+ */
+function enableCCWithRetry(): void {
+  // First attempt
+  const firstResult = enableClosedCaptions();
+  if (firstResult) {
+    console.log('SOFLIA Meet: CC enabled on first attempt');
+    // Still set up a few retries to hide the container
+    setupCaptionHiding();
+    return;
+  }
+
+  // Retry a few times only (max 5 attempts, every 5 seconds)
+  let attempts = 0;
+  ccEnableRetryInterval = setInterval(() => {
+    attempts++;
+
+    // Stop after 5 attempts
+    if (attempts > 5) {
+      console.log('SOFLIA Meet: Stopping CC enable retries');
+      if (ccEnableRetryInterval) {
+        clearInterval(ccEnableRetryInterval);
+        ccEnableRetryInterval = null;
+      }
+      return;
+    }
+
+    // Stop if captions are already detected
+    if (meetCaptionObserver?.isCaptionsDetected()) {
+      console.log('SOFLIA Meet: Captions detected, stopping retries');
+      if (ccEnableRetryInterval) {
+        clearInterval(ccEnableRetryInterval);
+        ccEnableRetryInterval = null;
+      }
+      return;
+    }
+
+    // Try to enable
+    const enabled = enableClosedCaptions();
+    if (enabled) {
+      console.log('SOFLIA Meet: CC enabled, stopping retries');
+      if (ccEnableRetryInterval) {
+        clearInterval(ccEnableRetryInterval);
+        ccEnableRetryInterval = null;
+      }
+      setupCaptionHiding();
+    }
+  }, 5000); // 5 seconds between attempts
+}
+
+/**
+ * Set up caption hiding (separate from enabling)
+ */
+function setupCaptionHiding(): void {
+  // Try to hide captions a few times
+  let hideAttempts = 0;
+  const hideInterval = setInterval(() => {
+    hideAttempts++;
+
+    if (hideAttempts > 10) {
+      clearInterval(hideInterval);
+      return;
+    }
+
+    const container = findCaptionContainer();
+    if (container) {
+      hideCaptionsVisually(container);
+      clearInterval(hideInterval);
+      console.log('SOFLIA Meet: Caption container hidden');
+    }
+  }, 2000);
+}
+
+
+/**
+ * Auto-detect Google Meet and start transcription
+ * Runs automatically when content script loads on meet.google.com
+ */
+function autoDetectGoogleMeet(): void {
+  if (!isGoogleMeetUrl()) return;
+
+  // Prevent concurrent detection loops, but allow if transcription already exists
+  if (meetAutoDetectRunning) return;
+  if (meetCaptionObserver) return; // Already transcribing
+
+  meetAutoDetectRunning = true;
+  console.log('SOFLIA Meet: Auto-detecting meeting...');
+
+  // Wait for meeting to become active
+  let checkCount = 0;
+  const checkInterval = setInterval(() => {
+    checkCount++;
+
+    if (isMeetingActive()) {
+      clearInterval(checkInterval);
+      meetAutoDetectRunning = false;
+      console.log('SOFLIA Meet: Meeting is active, starting transcription');
+
+      // Small delay to let UI settle
+      setTimeout(() => {
+        startMeetTranscription();
+      }, 2000);
+    }
+
+    // Stop checking after 90 seconds
+    if (checkCount > 45) {
+      clearInterval(checkInterval);
+      meetAutoDetectRunning = false;
+      console.log('SOFLIA Meet: Timeout waiting for meeting');
+    }
+  }, 2000);
+}
+
+/**
+ * Handle navigation away from meeting
+ */
+function handleMeetNavigation(): void {
+  if (!isGoogleMeetUrl()) {
+    if (meetCaptionObserver) {
+      console.log('SOFLIA Meet: Navigated away from meeting');
+      stopMeetTranscription();
+    }
+    meetAutoDetectRunning = false;
+  }
+}
+
+// ============================================
+// AUTO-DETECT GOOGLE MEET ON LOAD
+// ============================================
+
+// Use a version-stamped guard so reloaded content scripts always run
+const SOFLIA_VERSION = Date.now().toString();
+(window as any).__SOFLIA_MEET_VERSION__ = SOFLIA_VERSION;
+
+// Try immediately
+autoDetectGoogleMeet();
+
+// Also try on load event
+if (document.readyState !== 'complete') {
+  window.addEventListener('load', () => {
+    // Only run if this is still the active version
+    if ((window as any).__SOFLIA_MEET_VERSION__ === SOFLIA_VERSION) {
+      setTimeout(autoDetectGoogleMeet, 1500);
+    }
+  });
+}
+
+// Watch for SPA navigations (Google Meet is a SPA)
+// Only patch pushState once
+if (!(window as any).__SOFLIA_PUSHSTATE_PATCHED__) {
+  (window as any).__SOFLIA_PUSHSTATE_PATCHED__ = true;
+
+  const origPushState = history.pushState;
+  history.pushState = function(data: any, title: string, url?: string | URL | null) {
+    origPushState.call(this, data, title, url);
+    setTimeout(() => {
+      autoDetectGoogleMeet();
+      handleMeetNavigation();
+    }, 1000);
+  };
+
+  window.addEventListener('popstate', () => {
+    setTimeout(() => {
+      autoDetectGoogleMeet();
+      handleMeetNavigation();
+    }, 1000);
+  });
+}
+
+console.log('SOFLIA Meet: Auto-detection initialized');

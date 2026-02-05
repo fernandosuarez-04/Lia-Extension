@@ -9,6 +9,8 @@ import { SettingsModal } from './SettingsModal';
 import { FeedbackModal as _FeedbackModal } from './FeedbackModal';
 import { MapViewer } from '../components/MapViewer';
 import { ProjectHub } from '../components/ProjectHub';
+import { MeetingPanel } from '../components/MeetingPanel';
+import { needsComputerUse } from '../prompts';
 
 interface GroundingSource {
   uri: string;
@@ -290,6 +292,9 @@ function App() {
   // Settings & Feedback Modals
   const [isSettingsModalOpen, setIsSettingsModalOpen] = useState(false);
   const [_isFeedbackModalOpen, setIsFeedbackModalOpen] = useState(false);
+
+  // Meeting Panel
+  const [isMeetingPanelOpen, setIsMeetingPanelOpen] = useState(false);
   const [_feedbackType, setFeedbackType] = useState<'positive' | 'negative' | null>(null);
   const [_feedbackMessageContent, setFeedbackMessageContent] = useState('');
 
@@ -1286,14 +1291,48 @@ function App() {
         } else if (tab?.id) {
           const response = await chrome.tabs.sendMessage(tab.id, { action: "getStructuredDOM" });
           if (response?.dom) {
-            // Extract only the mainContent for analysis (not UI elements with INDEX values)
-            // The mainContent contains the actual text/conversation content
             const dom = response.dom;
-            if (dom.mainContent) {
-              // For analysis: send only the content, not interactive elements
+            
+            // CRITICAL: Check if this is a computer use request
+            // If so, send FULL DOM with interactive elements so AI can navigate
+            const isComputerUseRequest = needsComputerUse(apiMessage);
+            
+            if (isComputerUseRequest && dom.interactiveElements && dom.interactiveElements.length > 0) {
+              // Computer Use: Send full structured DOM with indexed elements
+              console.log('🖥️ Computer Use detected - sending full DOM with', dom.interactiveElements.length, 'interactive elements');
+              
+              // DEBUG: Log first 20 elements to see what the model receives
+              console.log('📋 First 20 elements being sent to model:');
+              dom.interactiveElements.slice(0, 20).forEach((el: any) => {
+                console.log(`  [${el.index}] ${el.tag} "${el.text?.substring(0,30) || ''}" ${el.ariaLabel ? `(${el.ariaLabel})` : ''}`);
+              });
+              
+              // Format interactive elements for the model
+              const elementsText = dom.interactiveElements.map((el: any) => {
+                let desc = `[${el.index}] ${el.tag}`;
+                if (el.text) desc += ` "${el.text.substring(0, 60)}"`;
+                if (el.ariaLabel) desc += ` (aria-label: "${el.ariaLabel}")`;
+                if (el.tooltip) desc += ` (tooltip: "${el.tooltip}")`;
+                if (el.attributes?.href) desc += ` -> ${el.attributes.href.substring(0, 50)}`;
+                if (el.attributes?.type) desc += ` [type=${el.attributes.type}]`;
+                if (el.position) desc += ` {visible: ${el.position.visible}}`;
+                return desc;
+              }).join('\n');
+              
+              pageContext = `URL: ${dom.url || tab.url}
+Título: ${dom.title || ''}
+Viewport: ${dom.viewport?.width}x${dom.viewport?.height}
+
+=== ELEMENTOS INTERACTIVOS (usa el INDEX para acciones) ===
+${elementsText}
+
+=== CONTENIDO DE LA PÁGINA ===
+${dom.mainContent || '[Sin contenido principal]'}`;
+            } else if (dom.mainContent) {
+              // Regular analysis: send only the content, not interactive elements
               pageContext = `URL: ${dom.url || tab.url}\nTítulo: ${dom.title || ''}\n\nCONTENIDO PRINCIPAL:\n${dom.mainContent}`;
             } else {
-              // Fallback: send minimal info without interactive elements
+              // Fallback: send minimal info
               pageContext = `URL: ${dom.url || tab.url}\nTítulo: ${dom.title || ''}\n\n[No se encontró contenido principal]`;
             }
           } else {
@@ -1566,15 +1605,36 @@ function App() {
         console.log(`✓ Acción encontrada: ${actionType}, índice: ${elementIndex}, valor: ${actionValue}`);
 
         try {
-          // Obtener todas las pestañas de la ventana actual
-          const tabs = await chrome.tabs.query({ active: true, lastFocusedWindow: true });
-          console.log('Pestañas encontradas:', tabs.length, tabs.map(t => ({ id: t.id, url: t.url?.substring(0, 50) })));
+          // Obtener la pestaña activa de la ventana actual (no lastFocusedWindow porque el popup puede ser la ventana activa)
+          let tabs = await chrome.tabs.query({ active: true, currentWindow: true });
+          console.log('Pestañas (currentWindow):', tabs.length, tabs.map(t => ({ id: t.id, url: t.url?.substring(0, 50) })));
+          
+          // Si no encuentra, intentar con todas las pestañas activas
+          if (tabs.length === 0) {
+            tabs = await chrome.tabs.query({ active: true });
+            console.log('Pestañas (todas activas):', tabs.length);
+          }
+          
+          // Si aún no hay, buscar cualquier pestaña en la ventana actual
+          if (tabs.length === 0) {
+            tabs = await chrome.tabs.query({ currentWindow: true });
+            console.log('Pestañas (currentWindow, todas):', tabs.length);
+          }
 
-          // Filtrar para obtener la pestaña real (no la del side panel)
-          const tab = tabs.find(t => t.url && !t.url.startsWith('chrome-extension://'));
+          // Filtrar para obtener la pestaña real (no la del side panel ni chrome-extension)
+          let tab = tabs.find(t => t.url && !t.url.startsWith('chrome-extension://') && !t.url.startsWith('chrome://'));
+          
+          // Si no encontramos tab válido, buscar explícitamente en todas las ventanas
+          if (!tab) {
+            const allTabs = await chrome.tabs.query({});
+            console.log('Buscando en todas las pestañas:', allTabs.length);
+            // Priorizar Gmail, luego cualquier otra página
+            tab = allTabs.find(t => t.url?.includes('mail.google.com')) || 
+                  allTabs.find(t => t.url && !t.url.startsWith('chrome'));
+          }
 
           if (!tab) {
-            console.error('No se encontró pestaña válida');
+            console.error('No se encontró pestaña válida en ninguna búsqueda');
             continue;
           }
 
@@ -1813,6 +1873,31 @@ function App() {
               </button>
             </div>
           )}
+
+          {/* Meeting button */}
+          <button
+            onClick={() => setIsMeetingPanelOpen(true)}
+            style={{
+              background: isMeetingPanelOpen ? 'var(--bg-dark-tertiary)' : 'var(--bg-dark-secondary)',
+              border: `1px solid ${isMeetingPanelOpen ? 'var(--color-accent)' : 'transparent'}`,
+              borderRadius: '6px',
+              padding: '6px',
+              cursor: 'pointer',
+              color: isMeetingPanelOpen ? 'var(--color-accent)' : 'var(--color-gray-medium)',
+              transition: 'all 0.2s',
+              display: 'flex',
+              alignItems: 'center',
+              justifyContent: 'center'
+            }}
+            title="Agente de Reuniones"
+          >
+            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+              <path d="M17 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2" />
+              <circle cx="9" cy="7" r="4" />
+              <path d="M23 21v-2a4 4 0 0 0-3-3.87" />
+              <path d="M16 3.13a4 4 0 0 1 0 7.75" />
+            </svg>
+          </button>
 
           {/* Settings button */}
           <div style={{ position: 'relative' }}>
@@ -3700,6 +3785,37 @@ function App() {
         supabase={supabase}
         onSave={loadUserSettings}
       />
+
+      {/* Meeting Panel */}
+      {isMeetingPanelOpen && (
+        <div style={{
+          position: 'fixed',
+          top: 0,
+          left: 0,
+          right: 0,
+          bottom: 0,
+          backgroundColor: 'rgba(0,0,0,0.6)',
+          backdropFilter: 'blur(4px)',
+          zIndex: 10003,
+          display: 'flex',
+          alignItems: 'center',
+          justifyContent: 'center'
+        }}>
+          <div style={{
+            width: '90%',
+            maxWidth: '500px',
+            height: '80%',
+            maxHeight: '600px',
+            background: 'var(--bg-modal)',
+            borderRadius: '16px',
+            border: '1px solid var(--border-modal)',
+            overflow: 'hidden',
+            boxShadow: 'var(--shadow-modal)'
+          }}>
+            <MeetingPanel onClose={() => setIsMeetingPanelOpen(false)} />
+          </div>
+        </div>
+      )}
 
       {/* Move Chat Modal */}
       {movingChatId && (

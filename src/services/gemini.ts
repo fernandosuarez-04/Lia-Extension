@@ -8,7 +8,8 @@ import {
   PROMPT_OPTIMIZER,
   AUDIO_TRANSCRIPTION_PROMPT,
   getImageGenerationPrompt,
-  needsComputerUse
+  needsComputerUse,
+  COMPUTER_USE_PROMPT
 } from "../prompts";
 import { getApiKeyWithCache } from "./api-keys";
 
@@ -552,6 +553,8 @@ export async function sendMessageStream(
 
   if (isDeepAnalysis) {
     console.log('🔍 DEEP ANALYSIS MODE ACTIVATED - Using DEEP_ANALYSIS_ONLY_PROMPT');
+  } else if (useComputerUse) {
+    console.log('🖥️ Computer Use mode - Using COMPUTER_USE_PROMPT');
   } else {
     console.log('📝 Normal mode - Using PRIMARY_CHAT_PROMPT');
   }
@@ -560,7 +563,11 @@ export async function sendMessageStream(
   // IMPORTANT: For deep analysis, put the boost FIRST (LLMs prioritize earlier instructions)
   let systemInstruction: string;
 
-  if (isDeepAnalysis && !useComputerUse) {
+  if (useComputerUse) {
+    // Computer Use: use the computer use prompt for DOM interaction
+    systemInstruction = COMPUTER_USE_PROMPT;
+    console.log('✅ System instruction set to: COMPUTER_USE_PROMPT');
+  } else if (isDeepAnalysis) {
     // Deep analysis: use ONLY the deep analysis prompt (it's self-contained)
     // Don't append PRIMARY_CHAT_PROMPT to avoid conflicting instructions
     systemInstruction = DEEP_ANALYSIS_ONLY_PROMPT;

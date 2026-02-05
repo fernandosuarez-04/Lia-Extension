@@ -6,6 +6,34 @@ let pendingSelection: { action: string; text: string; prompt: string } | null = 
 // Track which tabs already have the content script
 const injectedTabs = new Set<number>();
 
+// ============================================
+// MEETING STATE MANAGEMENT
+// ============================================
+
+interface MeetingParticipant {
+  id: string;
+  name: string;
+  isSpeaking: boolean;
+}
+
+interface CaptionEntry {
+  speaker: string;
+  text: string;
+  timestamp: number;
+}
+
+interface MeetingState {
+  isActive: boolean;
+  tabId: number;
+  url: string;
+  title: string;
+  startTime: number;
+  captions: CaptionEntry[];
+  participants: MeetingParticipant[];
+}
+
+let meetingState: MeetingState | null = null;
+
 // Open side panel on icon click (runs every time the service worker starts)
 chrome.sidePanel.setPanelBehavior({ openPanelOnActionClick: true })
   .catch((error) => console.error('setPanelBehavior:', error));
@@ -147,5 +175,142 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
     sendResponse(selection);
   }
 
+  // ============================================
+  // MEETING MESSAGE HANDLERS
+  // ============================================
+
+  if (message.type === 'MEETING_DETECTED') {
+    const tabId = sender.tab?.id || 0;
+    console.log('Background: Meeting detected in tab', tabId, message.title);
+
+    meetingState = {
+      isActive: true,
+      tabId,
+      url: message.url || '',
+      title: message.title || 'Google Meet',
+      startTime: Date.now(),
+      captions: [],
+      participants: []
+    };
+
+    // Notify popup if open
+    chrome.runtime.sendMessage({
+      type: 'MEETING_STATE_CHANGED',
+      state: meetingState
+    }).catch(() => {});
+
+    sendResponse({ received: true });
+    return true;
+  }
+
+  if (message.type === 'CAPTION_RECEIVED') {
+    if (meetingState && meetingState.isActive) {
+      // Add caption to buffer
+      meetingState.captions.push({
+        speaker: message.speaker || 'Participante',
+        text: message.text || '',
+        timestamp: message.timestamp || Date.now()
+      });
+
+      // Keep last 500 captions (prevent memory issues)
+      if (meetingState.captions.length > 500) {
+        meetingState.captions.shift();
+      }
+
+      console.log('Background: Caption received -', message.speaker, ':', message.text?.substring(0, 50));
+    }
+
+    // Relay to popup/sidepanel
+    chrome.runtime.sendMessage({
+      type: 'CAPTION_RECEIVED',
+      speaker: message.speaker,
+      text: message.text,
+      timestamp: message.timestamp
+    }).catch(() => {});
+
+    sendResponse({ received: true });
+    return true;
+  }
+
+  if (message.type === 'PARTICIPANTS_UPDATED') {
+    if (meetingState && meetingState.isActive) {
+      meetingState.participants = message.participants || [];
+    }
+
+    // Relay to popup/sidepanel
+    chrome.runtime.sendMessage({
+      type: 'PARTICIPANTS_UPDATED',
+      participants: message.participants
+    }).catch(() => {});
+
+    sendResponse({ received: true });
+    return true;
+  }
+
+  if (message.type === 'MEETING_ENDED') {
+    console.log('Background: Meeting ended');
+
+    if (meetingState) {
+      meetingState.isActive = false;
+    }
+
+    // Notify popup
+    chrome.runtime.sendMessage({
+      type: 'MEETING_STATE_CHANGED',
+      state: meetingState
+    }).catch(() => {});
+
+    sendResponse({ received: true });
+    return true;
+  }
+
+  if (message.type === 'GET_MEETING_STATE') {
+    console.log('Background: GET_MEETING_STATE, isActive:', meetingState?.isActive);
+    sendResponse(meetingState);
+    return true;
+  }
+
+  if (message.type === 'CLEAR_MEETING_STATE') {
+    console.log('Background: Clearing meeting state');
+    meetingState = null;
+    sendResponse({ cleared: true });
+    return true;
+  }
+
+  // When popup requests transcription start, find the Meet tab and tell it to start
+  if (message.type === 'START_MEET_TRANSCRIPTION') {
+    console.log('Background: Popup requesting transcription start');
+    chrome.tabs.query({ url: 'https://meet.google.com/*' }, (tabs) => {
+      const meetTab = tabs.find(t => t.id && t.url && /\/[a-z]{3}-[a-z]{4}-[a-z]{3}/i.test(t.url));
+      if (meetTab && meetTab.id) {
+        console.log('Background: Forwarding startMeetTranscription to tab', meetTab.id);
+        chrome.tabs.sendMessage(meetTab.id, { action: 'startMeetTranscription' }, (resp) => {
+          console.log('Background: Content script responded:', resp);
+          sendResponse({ sent: true, tabId: meetTab.id });
+        });
+      } else {
+        console.log('Background: No Google Meet tab found');
+        sendResponse({ sent: false, error: 'No Google Meet tab found' });
+      }
+    });
+    return true;
+  }
+
   return true;
+});
+
+// Clean up meeting state when meeting tab is closed
+chrome.tabs.onRemoved.addListener((tabId) => {
+  injectedTabs.delete(tabId);
+
+  // Clear meeting state if meeting tab was closed
+  if (meetingState && meetingState.tabId === tabId) {
+    console.log('Background: Meeting tab closed, clearing state');
+    meetingState.isActive = false;
+
+    chrome.runtime.sendMessage({
+      type: 'MEETING_STATE_CHANGED',
+      state: meetingState
+    }).catch(() => {});
+  }
 });
