@@ -1,0 +1,277 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Permisos - Soflia Agent</title>
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600&display=swap" rel="stylesheet">
+    <style>
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+        
+        body {
+            font-family: 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+            background: #0a0a0a;
+            color: #fafafa;
+            min-height: 100vh;
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            justify-content: center;
+            padding: 24px;
+        }
+        
+        .container {
+            width: 100%;
+            max-width: 420px;
+        }
+        
+        .card {
+            background: #141414;
+            border: 1px solid rgba(255, 255, 255, 0.08);
+            border-radius: 16px;
+            padding: 40px 32px;
+        }
+        
+        .icon-wrapper {
+            width: 56px;
+            height: 56px;
+            background: rgba(0, 212, 179, 0.1);
+            border-radius: 14px;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            margin-bottom: 24px;
+        }
+        
+        .icon-wrapper svg {
+            width: 28px;
+            height: 28px;
+            stroke: #00d4b3;
+        }
+        
+        h1 {
+            font-size: 20px;
+            font-weight: 600;
+            color: #fafafa;
+            margin-bottom: 12px;
+            letter-spacing: -0.02em;
+        }
+        
+        .description {
+            font-size: 14px;
+            line-height: 1.6;
+            color: #737373;
+            margin-bottom: 32px;
+        }
+        
+        .permission-row {
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            padding: 16px;
+            background: rgba(255, 255, 255, 0.03);
+            border: 1px solid rgba(255, 255, 255, 0.06);
+            border-radius: 10px;
+            margin-bottom: 24px;
+        }
+        
+        .permission-info {
+            display: flex;
+            align-items: center;
+            gap: 12px;
+        }
+        
+        .permission-icon {
+            width: 36px;
+            height: 36px;
+            background: rgba(255, 255, 255, 0.05);
+            border-radius: 8px;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+        }
+        
+        .permission-icon svg {
+            width: 18px;
+            height: 18px;
+            stroke: #a3a3a3;
+        }
+        
+        .permission-text {
+            font-size: 14px;
+            font-weight: 500;
+            color: #e5e5e5;
+        }
+        
+        .status-badge {
+            font-size: 12px;
+            font-weight: 500;
+            padding: 6px 10px;
+            border-radius: 6px;
+            text-transform: uppercase;
+            letter-spacing: 0.03em;
+        }
+        
+        .status-pending {
+            background: rgba(250, 204, 21, 0.1);
+            color: #facc15;
+        }
+        
+        .status-granted {
+            background: rgba(34, 197, 94, 0.1);
+            color: #22c55e;
+        }
+        
+        .status-denied {
+            background: rgba(239, 68, 68, 0.1);
+            color: #ef4444;
+        }
+        
+        .btn-primary {
+            width: 100%;
+            padding: 14px 24px;
+            background: #00d4b3;
+            color: #000;
+            border: none;
+            border-radius: 10px;
+            font-size: 14px;
+            font-weight: 600;
+            cursor: pointer;
+            transition: all 0.2s ease;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            gap: 8px;
+        }
+        
+        .btn-primary:hover {
+            background: #00e5c2;
+        }
+        
+        .btn-primary:disabled {
+            opacity: 0.5;
+            cursor: not-allowed;
+        }
+        
+        .btn-primary svg {
+            width: 18px;
+            height: 18px;
+            stroke: currentColor;
+        }
+        
+        .message {
+            margin-top: 20px;
+            padding: 14px 16px;
+            border-radius: 10px;
+            font-size: 13px;
+            line-height: 1.5;
+            display: none;
+        }
+        
+        .message-success {
+            background: rgba(34, 197, 94, 0.1);
+            border: 1px solid rgba(34, 197, 94, 0.2);
+            color: #22c55e;
+        }
+        
+        .message-error {
+            background: rgba(239, 68, 68, 0.1);
+            border: 1px solid rgba(239, 68, 68, 0.2);
+            color: #ef4444;
+        }
+        
+        .footer-note {
+            margin-top: 24px;
+            text-align: center;
+            font-size: 12px;
+            color: #525252;
+            line-height: 1.5;
+        }
+        
+        .logo {
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            gap: 10px;
+            margin-bottom: 32px;
+        }
+        
+        .logo-text {
+            font-size: 18px;
+            font-weight: 600;
+            color: #fafafa;
+            letter-spacing: -0.02em;
+        }
+        
+        .logo-dot {
+            width: 8px;
+            height: 8px;
+            background: #00d4b3;
+            border-radius: 50%;
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <div class="logo">
+            <span class="logo-text">Soflia</span>
+            <span class="logo-dot"></span>
+        </div>
+        
+        <div class="card">
+            <div class="icon-wrapper">
+                <svg viewBox="0 0 24 24" fill="none" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                    <path d="M12 1a3 3 0 0 0-3 3v8a3 3 0 0 0 6 0V4a3 3 0 0 0-3-3z"></path>
+                    <path d="M19 10v2a7 7 0 0 1-14 0v-2"></path>
+                    <line x1="12" y1="19" x2="12" y2="23"></line>
+                    <line x1="8" y1="23" x2="16" y2="23"></line>
+                </svg>
+            </div>
+            
+            <h1>Acceso al micrófono</h1>
+            <p class="description">
+                Para habilitar las funciones de voz en tiempo real, necesitamos acceso a tu micrófono. 
+                Haz clic en el botón y selecciona "Permitir" cuando el navegador lo solicite.
+            </p>
+            
+            <div class="permission-row">
+                <div class="permission-info">
+                    <div class="permission-icon">
+                        <svg viewBox="0 0 24 24" fill="none" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                            <path d="M12 1a3 3 0 0 0-3 3v8a3 3 0 0 0 6 0V4a3 3 0 0 0-3-3z"></path>
+                            <path d="M19 10v2a7 7 0 0 1-14 0v-2"></path>
+                        </svg>
+                    </div>
+                    <span class="permission-text">Micrófono</span>
+                </div>
+                <span id="micStatus" class="status-badge status-pending">Pendiente</span>
+            </div>
+            
+            <button id="requestBtn" class="btn-primary">
+                <svg viewBox="0 0 24 24" fill="none" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                    <path d="M12 1a3 3 0 0 0-3 3v8a3 3 0 0 0 6 0V4a3 3 0 0 0-3-3z"></path>
+                    <path d="M19 10v2a7 7 0 0 1-14 0v-2"></path>
+                    <line x1="12" y1="19" x2="12" y2="23"></line>
+                    <line x1="8" y1="23" x2="16" y2="23"></line>
+                </svg>
+                <span id="btnText">Activar micrófono</span>
+            </button>
+            
+            <div id="statusMessage" class="message"></div>
+        </div>
+        
+        <p class="footer-note">
+            Este permiso solo se utiliza para las conversaciones de voz.<br>
+            Puedes revocarlo en cualquier momento desde la configuración del navegador.
+        </p>
+    </div>
+
+    <script src="permissions.js"></script>
+</body>
+</html>

@@ -138,12 +138,12 @@ export default function Auth() {
           width: '56px', height: '56px', background: 'radial-gradient(circle, rgba(0, 212, 179, 0.4) 0%, transparent 70%)',
           filter: 'blur(12px)', zIndex: 0
         }} />
-        <img src="/assets/Icono.png" alt="SOFLIA" style={{ width: '48px', height: '48px', position: 'relative', zIndex: 1, filter: 'drop-shadow(0 4px 12px rgba(0,0,0,0.3))' }} />
+        <img src="/assets/Icono.png" alt="Soflia" style={{ width: '48px', height: '48px', position: 'relative', zIndex: 1, filter: 'drop-shadow(0 4px 12px rgba(0,0,0,0.3))' }} />
       </div>
 
       <div style={{ textAlign: 'center', marginBottom: '14px' }}>
         <h1 style={{ fontSize: '18px', fontWeight: '700', marginBottom: '4px', color: '#fff', margin: 0 }}>
-          {mode === 'login' ? 'Bienvenido a SOFLIA' : 'Crear cuenta'}
+          {mode === 'login' ? 'Bienvenido a Soflia' : 'Crear cuenta'}
         </h1>
         <p style={{ fontSize: '12px', color: '#94a3b8', margin: '4px 0 0 0' }}>
           {mode === 'login'

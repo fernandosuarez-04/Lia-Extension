@@ -1,7 +1,7 @@
 /**
  * PROMPTS - BARREL FILE
  *
- * Archivo central de exportación para todos los prompts de SOFLIA Agent.
+ * Archivo central de exportación para todos los prompts de Soflia Agent.
  * Importa desde aquí para mantener imports limpios.
  *
  * Estructura:
@@ -14,13 +14,12 @@
  */
 
 // ============================================
-// COMPUTER USE
+// WEB AGENT (browser control via function calling)
 // ============================================
 export {
-  COMPUTER_USE_PROMPT,
-  buildComputerUsePrompt,
-  COMPUTER_USE_KEYWORDS,
-  needsComputerUse
+  WEB_AGENT_SYSTEM_PROMPT,
+  WEB_AGENT_TOOLS,
+  needsWebAgent
 } from './computer-use';
 
 // ============================================

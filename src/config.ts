@@ -23,7 +23,7 @@ export const CONTENT_GEN_SUPABASE = {
 export const MODELS = {
   PRIMARY: "gemini-3-flash-preview",  // Gemini 3 Flash (free tier disponible)
   FALLBACK: "gemini-2.5-flash",  // Fallback estable (no preview, amplia disponibilidad)
-  COMPUTER_USE: "gemini-3-flash-preview",  // Mismo que PRIMARY; usa prompts custom [ACTION:...], no API nativa Computer Use
+  WEB_AGENT: "gemini-2.5-flash",  // Web agent with function calling (needs stable tool support)
   IMAGE_GENERATION: "gemini-2.5-flash-image",
   DEEP_RESEARCH: "deep-research-pro-preview-12-2025",
   LIVE: "gemini-2.5-flash-native-audio-preview-12-2025",  // Live API WebSocket (bidiGenerateContent)

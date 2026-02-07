@@ -42,7 +42,7 @@ export class MeetCaptionObserver {
    */
   start(callback: CaptionCallback): void {
     if (this.isRunning) {
-      console.log('SOFLIA Transcription: Already running');
+      console.log('Soflia Transcription: Already running');
       return;
     }
 
@@ -50,7 +50,7 @@ export class MeetCaptionObserver {
     this.isRunning = true;
     this.retryCount = 0;
 
-    console.log('SOFLIA Transcription: Starting...');
+    console.log('Soflia Transcription: Starting...');
 
     // Try to find container immediately
     this.findAndObserveContainer();
@@ -59,7 +59,7 @@ export class MeetCaptionObserver {
     this.retryInterval = setInterval(() => {
       if (!this.captionContainer && this.retryCount < this.maxRetries) {
         this.retryCount++;
-        console.log(`SOFLIA Transcription: Searching for captions... (${this.retryCount}/${this.maxRetries})`);
+        console.log(`Soflia Transcription: Searching for captions... (${this.retryCount}/${this.maxRetries})`);
         this.findAndObserveContainer();
       } else if (this.captionContainer) {
         if (this.retryInterval) {
@@ -71,7 +71,7 @@ export class MeetCaptionObserver {
           clearInterval(this.retryInterval);
           this.retryInterval = null;
         }
-        console.log('SOFLIA Transcription: Max retries reached');
+        console.log('Soflia Transcription: Max retries reached');
       }
     }, 2000);
   }
@@ -99,7 +99,7 @@ export class MeetCaptionObserver {
 
     this.captionContainer = null;
     this.lastEmittedText = '';
-    console.log('SOFLIA Transcription: Stopped');
+    console.log('Soflia Transcription: Stopped');
   }
 
   isCaptionsDetected(): boolean {
@@ -127,7 +127,7 @@ export class MeetCaptionObserver {
 
     if (container && container !== this.captionContainer) {
       this.captionContainer = container;
-      console.log('SOFLIA Transcription: Caption container found');
+      console.log('Soflia Transcription: Caption container found');
 
       // Hide visually (only clip-path, keep dimensions intact)
       hideCaptionsVisually(container);
@@ -161,7 +161,7 @@ export class MeetCaptionObserver {
     // Do an initial read
     this.scheduleRead();
 
-    console.log('SOFLIA Transcription: Observing container');
+    console.log('Soflia Transcription: Observing container');
   }
 
   /**
@@ -319,7 +319,7 @@ export class MeetCaptionObserver {
       }
 
     } catch (e) {
-      console.error('SOFLIA: Error extracting caption:', e);
+      console.error('Soflia: Error extracting caption:', e);
     }
 
     return { speaker, text: captionText };

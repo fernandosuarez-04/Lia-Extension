@@ -31,6 +31,16 @@
 
   --shadow-modal: 0 8px 32px rgba(0, 0, 0, 0.4);
   --color-on-accent: #000000; /* Black text on bright green accent */
+
+  /* Markdown specific variables (Dark Mode Defaults) */
+  --color-text-muted: rgba(255, 255, 255, 0.85);
+  --color-code-text: #c9d1d9;
+  --color-code-bg: rgba(142, 150, 170, 0.14);
+  --border-table: rgba(255, 255, 255, 0.1);
+  --color-table-text: rgba(255, 255, 255, 0.9);
+  --bg-table-cell: rgba(255, 255, 255, 0.02);
+  --bg-table-row-even: rgba(255, 255, 255, 0.04);
+  --bg-table-row-hover: rgba(0, 212, 179, 0.08);
 }
 
 html[data-theme="light"] {
@@ -47,6 +57,16 @@ html[data-theme="light"] {
   --bg-modal: #ffffff;
   --border-modal: #e9ecef;
   --shadow-modal: 0 4px 20px rgba(0, 0, 0, 0.1);
+
+  /* Markdown Light Mode Overrides */
+  --color-text-muted: rgba(10, 37, 64, 0.7);
+  --color-code-text: #24292f;
+  --color-code-bg: rgba(10, 37, 64, 0.06);
+  --border-table: #e9ecef;
+  --color-table-text: #0a2540;
+  --bg-table-cell: transparent;
+  --bg-table-row-even: #f8f9fa;
+  --bg-table-row-hover: rgba(0, 212, 179, 0.15);
 }
 
 html[data-theme="dark"] {
@@ -65,6 +85,12 @@ html[data-theme="dark"] {
   box-sizing: border-box;
 }
 
+html {
+  background-color: var(--bg-dark-main);
+  overflow-x: hidden;
+  overflow-y: hidden;
+}
+
 body {
   margin: 0;
   padding: 0;
@@ -75,6 +101,7 @@ body {
   -moz-osx-font-smoothing: grayscale;
   min-height: 500px;
   width: 100%;
+  max-width: 100%;
   height: 100vh;
   overflow-x: hidden;
   overflow-y: hidden;
@@ -82,13 +109,11 @@ body {
 
 #root {
   width: 100%;
+  max-width: 100%;
   height: 100%;
   display: flex;
   flex-direction: column;
-}
-
-html {
-  background-color: var(--bg-dark-main);
+  overflow-x: hidden;
 }
 
 /* Scrollbar styling */
@@ -183,12 +208,12 @@ html {
 
 .markdown-content h3 {
   font-size: 15px;
-  color: rgba(255, 255, 255, 0.9);
+  color: var(--color-text-muted);
 }
 
 .markdown-content h4 {
   font-size: 14px;
-  color: rgba(255, 255, 255, 0.85);
+  color: var(--color-text-muted);
 }
 
 .markdown-content p {
@@ -203,7 +228,7 @@ html {
 
 .markdown-content em {
   font-style: italic;
-  color: rgba(255, 255, 255, 0.85);
+  color: var(--color-text-muted);
 }
 
 .markdown-content ul,
@@ -228,8 +253,8 @@ html {
 
 /* Inline code - ChatGPT style */
 .markdown-content code:not(pre code) {
-  background-color: rgba(142, 150, 170, 0.14);
-  color: #c9d1d9;
+  background-color: var(--color-code-bg);
+  color: var(--color-code-text);
   padding: 2px 6px;
   border-radius: 6px;
   font-family: "SF Mono", "Fira Code", "Consolas", "Monaco", monospace;
@@ -296,7 +321,7 @@ html {
   font-size: 13px;
   border-radius: 12px;
   overflow: hidden;
-  border: 1px solid rgba(255, 255, 255, 0.1);
+  border: 1px solid var(--border-table);
   box-shadow: 0 2px 8px rgba(0, 0, 0, 0.2);
 }
 
@@ -304,7 +329,7 @@ html {
 .markdown-content td {
   padding: 12px 16px;
   text-align: left;
-  border-bottom: 1px solid rgba(255, 255, 255, 0.08);
+  border-bottom: 1px solid var(--border-table);
 }
 
 .markdown-content th {
@@ -322,16 +347,16 @@ html {
 }
 
 .markdown-content td {
-  background-color: rgba(255, 255, 255, 0.02);
-  color: rgba(255, 255, 255, 0.9);
+  background-color: var(--bg-table-cell);
+  color: var(--color-table-text);
 }
 
 .markdown-content tr:nth-child(even) td {
-  background-color: rgba(255, 255, 255, 0.04);
+  background-color: var(--bg-table-row-even);
 }
 
 .markdown-content tr:hover td {
-  background-color: rgba(0, 212, 179, 0.08);
+  background-color: var(--bg-table-row-hover);
 }
 
 .markdown-content tr:last-child td {

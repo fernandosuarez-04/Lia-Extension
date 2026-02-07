@@ -2,14 +2,11 @@
 import { GoogleGenerativeAI } from "@google/generative-ai";
 import { GOOGLE_API_KEY, MODELS } from "../config";
 import {
-  buildComputerUsePrompt,
   buildPrimaryChatPrompt,
   PRIMARY_CHAT_PROMPT,
   PROMPT_OPTIMIZER,
   AUDIO_TRANSCRIPTION_PROMPT,
   getImageGenerationPrompt,
-  needsComputerUse,
-  COMPUTER_USE_PROMPT
 } from "../prompts";
 import { getApiKeyWithCache } from "./api-keys";
 
@@ -65,13 +62,6 @@ async function getPrimaryModel() {
   return ai.getGenerativeModel({
     model: MODELS.PRIMARY,
     tools: searchTools,
-  });
-}
-
-async function getComputerUseModel() {
-  const ai = await getGenAI();
-  return ai.getGenerativeModel({
-    model: MODELS.COMPUTER_USE,
   });
 }
 
@@ -530,17 +520,15 @@ export async function sendMessageStream(
     instructions?: string;
   },
   projectContext?: string,
-  thinkingConfig?: ThinkingConfig
+  thinkingConfig?: ThinkingConfig,
+  images?: string[]
 ) {
   // Determine IDs
   const primaryId = modelOverrides?.primary || MODELS.PRIMARY;
   const fallbackId = modelOverrides?.fallback || MODELS.FALLBACK;
 
-  // Detect Computer Use
-  const useComputerUse = needsComputerUse(message);
-
   // Decide active model
-  const activeModelId = useComputerUse ? MODELS.COMPUTER_USE : primaryId;
+  const activeModelId = primaryId;
 
   // Detect if user wants deep analysis
   // Log the message for debugging
@@ -553,8 +541,6 @@ export async function sendMessageStream(
 
   if (isDeepAnalysis) {
     console.log('🔍 DEEP ANALYSIS MODE ACTIVATED - Using DEEP_ANALYSIS_ONLY_PROMPT');
-  } else if (useComputerUse) {
-    console.log('🖥️ Computer Use mode - Using COMPUTER_USE_PROMPT');
   } else {
     console.log('📝 Normal mode - Using PRIMARY_CHAT_PROMPT');
   }
@@ -563,11 +549,7 @@ export async function sendMessageStream(
   // IMPORTANT: For deep analysis, put the boost FIRST (LLMs prioritize earlier instructions)
   let systemInstruction: string;
 
-  if (useComputerUse) {
-    // Computer Use: use the computer use prompt for DOM interaction
-    systemInstruction = COMPUTER_USE_PROMPT;
-    console.log('✅ System instruction set to: COMPUTER_USE_PROMPT');
-  } else if (isDeepAnalysis) {
+  if (isDeepAnalysis) {
     // Deep analysis: use ONLY the deep analysis prompt (it's self-contained)
     // Don't append PRIMARY_CHAT_PROMPT to avoid conflicting instructions
     systemInstruction = DEEP_ANALYSIS_ONLY_PROMPT;
@@ -578,7 +560,7 @@ export async function sendMessageStream(
     console.log('📝 System instruction set to: PRIMARY_CHAT_PROMPT');
   }
 
-  if (!useComputerUse && personalization) {
+  if (personalization) {
       let personality = "\n\n=== USER PERSONALIZATION SETTINGS ===\n";
       if (personalization.nickname) personality += `User's Name/Nickname: "${personalization.nickname}". Address them by this name occasionally.\n`;
       if (personalization.occupation) personality += `User's Occuption/Role: ${personalization.occupation}. Adapt analogies and complexity to this role.\n`;
@@ -626,13 +608,11 @@ export async function sendMessageStream(
 
   // Initialize specific model instance dynamically
   const ai = await getGenAI();
-  const activeModelInstance = useComputerUse
-    ? await getComputerUseModel()
-    : ai.getGenerativeModel({
-        model: activeModelId,
-        tools: searchTools, // Assuming primary/chosen model supports search
-        systemInstruction: systemInstruction
-      });
+  const activeModelInstance = ai.getGenerativeModel({
+    model: activeModelId,
+    tools: searchTools,
+    systemInstruction: systemInstruction
+  });
 
   console.log('=== GEMINI SERVICE ===');
   console.log('Model:', activeModelId);
@@ -654,16 +634,38 @@ export async function sendMessageStream(
   });
 
   // Build Prompt
-  let prompt = message;
+  let promptText = message;
   if (context) {
-    prompt = useComputerUse 
-      ? buildComputerUsePrompt(context, message) 
-      : buildPrimaryChatPrompt(context, message);
+    promptText = buildPrimaryChatPrompt(context, message);
+  }
+
+  // Prepare message content (could be string or array of parts)
+  let messageContent: any = promptText;
+
+  if (images && images.length > 0) {
+    const imageParts = images.map(imgBase64 => {
+      // Extract clean base64 and mimeType
+      // Format: data:image/png;base64,.....
+      const match = imgBase64.match(/^data:(image\/[a-z]+);base64,(.+)$/);
+      if (match) {
+        return {
+          inlineData: {
+            mimeType: match[1],
+            data: match[2]
+          }
+        };
+      }
+      return null;
+    }).filter(part => part !== null);
+
+    if (imageParts.length > 0) {
+      messageContent = [promptText, ...imageParts];
+    }
   }
 
   try {
     try {
-      const result = await chatSession.sendMessageStream(prompt);
+      const result = await chatSession.sendMessageStream(messageContent);
       return {
         stream: result.stream,
         response: result.response,
@@ -677,8 +679,6 @@ export async function sendMessageStream(
     } catch (primaryError) {
       console.warn(`Primary model (${activeModelId}) failed, trying fallback (${fallbackId})...`, primaryError);
 
-      if (useComputerUse) throw primaryError; // No fallback for computer use
-
       const history = await chatSession.getHistory();
       const fallbackInstance = ai.getGenerativeModel({
         model: fallbackId,
@@ -691,7 +691,7 @@ export async function sendMessageStream(
       });
       chatSession = fallbackChat; // Update global session
 
-      const result = await fallbackChat.sendMessageStream(prompt);
+      const result = await fallbackChat.sendMessageStream(messageContent);
       return {
         stream: result.stream,
         response: result.response,
@@ -822,19 +822,61 @@ export const runMapsQuery = async (
     let parsedData: { summary: string; places: any[] } = { summary: '', places: [] };
     
     try {
-        parsedData = JSON.parse(textData);
+        // First, try to clean the response if it has markdown code blocks
+        let cleanedData = textData.trim();
+        
+        // Remove markdown code blocks (```json ... ``` or ``` ... ```)
+        if (cleanedData.startsWith('```')) {
+          // Find the end of the opening fence
+          const firstNewline = cleanedData.indexOf('\n');
+          const closingFence = cleanedData.lastIndexOf('```');
+          if (closingFence > firstNewline) {
+            cleanedData = cleanedData.substring(firstNewline + 1, closingFence).trim();
+          }
+        }
+        
+        // Try to parse the cleaned data
+        parsedData = JSON.parse(cleanedData);
     } catch (e) {
         console.error("Error parsing Maps JSON:", e);
-        // Fallback simple parsing if model adds markdown blocks
-        const match = textData.match(/\{[\s\S]*\}/);
-        if (match) {
+        // Fallback: try to extract JSON object from the text
+        // This handles cases where the model adds extra text before/after JSON
+        const jsonMatch = textData.match(/\{[\s\S]*"places"[\s\S]*\}/);
+        if (jsonMatch) {
             try {
-                parsedData = JSON.parse(match[0]);
+                parsedData = JSON.parse(jsonMatch[0]);
             } catch (e2) {
-                return { text: "No pude procesar los resultados del mapa.", places: [] };
+                console.error("Error parsing extracted JSON:", e2);
+                // Last resort: try to find any valid JSON object
+                const anyJsonMatch = textData.match(/\{[^{}]*(?:\{[^{}]*\}[^{}]*)*\}/g);
+                if (anyJsonMatch) {
+                  for (const match of anyJsonMatch) {
+                    try {
+                      const parsed = JSON.parse(match);
+                      if (parsed.places || parsed.summary) {
+                        parsedData = parsed;
+                        break;
+                      }
+                    } catch {
+                      continue;
+                    }
+                  }
+                }
+                
+                if (!parsedData.places || parsedData.places.length === 0) {
+                  // Return the raw text as summary if we can't parse JSON
+                  return { 
+                    text: textData.replace(/```[\s\S]*?```/g, '').trim() || "No pude procesar los resultados del mapa.", 
+                    places: [] 
+                  };
+                }
             }
         } else {
-             return { text: "Hubo un error interpretando los datos del mapa.", places: [] };
+             // No JSON found, return the text as-is
+             return { 
+               text: textData.replace(/```[\s\S]*?```/g, '').trim() || "Hubo un error interpretando los datos del mapa.", 
+               places: [] 
+             };
         }
     }
 

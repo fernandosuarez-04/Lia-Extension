@@ -113,7 +113,7 @@ export function enableClosedCaptions(): boolean {
     ) as HTMLElement;
     if (closeBtn) {
       closeBtn.click();
-      console.log('SOFLIA: Closed settings dialog');
+      console.log('Soflia: Closed settings dialog');
     } else {
       // Try clicking outside or pressing escape
       const backdrop = document.querySelector('[data-backdrop="true"]') as HTMLElement;
@@ -124,7 +124,7 @@ export function enableClosedCaptions(): boolean {
 
   // If captions are already active, don't click anything
   if (areCaptionsAlreadyActive()) {
-    console.log('SOFLIA: Captions already active (detected in DOM)');
+    console.log('Soflia: Captions already active (detected in DOM)');
     return true;
   }
 
@@ -147,27 +147,27 @@ export function enableClosedCaptions(): boolean {
       if (ariaLabel.includes('desactivar') ||
           ariaLabel.includes('turn off') ||
           ariaLabel.includes('ocultar')) {
-        console.log('SOFLIA: CC already enabled (button says turn off)');
+        console.log('Soflia: CC already enabled (button says turn off)');
         return true;
       }
 
       // Check if already pressed
       const isActive = btn.getAttribute('aria-pressed') === 'true';
       if (isActive) {
-        console.log('SOFLIA: CC already enabled (aria-pressed)');
+        console.log('Soflia: CC already enabled (aria-pressed)');
         return true;
       }
 
       // Only click if label says "Activar" or "Turn on"
       if (ariaLabel.includes('activar') || ariaLabel.includes('turn on') || ariaLabel.includes('habilitar')) {
         btn.click();
-        console.log('SOFLIA: CC enabled via:', sel);
+        console.log('Soflia: CC enabled via:', sel);
         return true;
       }
     } catch { /* skip */ }
   }
 
-  console.log('SOFLIA: CC button not found or already active');
+  console.log('Soflia: CC button not found or already active');
   return false;
 }
 
@@ -224,7 +224,7 @@ export function findCaptionContainer(): HTMLElement | null {
       const isEmpty = text.length === 0;
 
       if (hasText || isEmpty) {
-        console.log('SOFLIA: Found caption container via aria-live', hasText ? '(with text)' : '(empty)');
+        console.log('Soflia: Found caption container via aria-live', hasText ? '(with text)' : '(empty)');
         return region;
       }
     }
@@ -241,7 +241,7 @@ export function findCaptionContainer(): HTMLElement | null {
       const text = region.textContent?.trim() || '';
       // Accept with text (speech content) or empty (waiting for speech)
       if ((text.length > 10 && text.includes(' ')) || text.length === 0) {
-        console.log('SOFLIA: Found caption container via role attribute');
+        console.log('Soflia: Found caption container via role attribute');
         return region;
       }
     }
@@ -322,12 +322,12 @@ export function findCaptionContainer(): HTMLElement | null {
     }
 
     if (bestCandidate && bestScore >= 15) {
-      console.log('SOFLIA: Found caption container via heuristic scan, score:', bestScore);
+      console.log('Soflia: Found caption container via heuristic scan, score:', bestScore);
       return bestCandidate;
     }
 
   } catch (e) {
-    console.error('SOFLIA: Error finding caption container:', e);
+    console.error('Soflia: Error finding caption container:', e);
   }
 
   return null;
@@ -353,9 +353,9 @@ export function hideCaptionsVisually(container: HTMLElement): void {
     // DO NOT set height:0, width:0, display:none, or visibility:hidden
     // Those can cause Meet to stop updating the captions
 
-    console.log('SOFLIA: Captions hidden visually (clip-path + opacity)');
+    console.log('Soflia: Captions hidden visually (clip-path + opacity)');
   } catch (e) {
-    console.error('SOFLIA: Error hiding captions:', e);
+    console.error('Soflia: Error hiding captions:', e);
   }
 }
 
@@ -412,7 +412,7 @@ export function getParticipants(): MeetParticipant[] {
     });
 
   } catch (e) {
-    console.error('SOFLIA: Error getting participants:', e);
+    console.error('Soflia: Error getting participants:', e);
   }
 
   return participants;

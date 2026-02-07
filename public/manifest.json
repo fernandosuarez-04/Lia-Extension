@@ -1,15 +1,16 @@
 {
   "manifest_version": 3,
-  "name": "SOFLIA Agent",
+  "name": "Soflia Agent",
   "version": "7.0.0",
-  "description": "Agente inteligente del ecosistema SOFLIA",
+  "description": "Agente inteligente del ecosistema Soflia",
   "permissions": [
     "activeTab",
     "tabs",
     "scripting",
     "storage",
     "sidePanel",
-    "tabCapture"
+    "tabCapture",
+    "offscreen"
   ],
   "host_permissions": [
     "<all_urls>"
@@ -47,7 +48,7 @@
   },
   "web_accessible_resources": [
     {
-      "resources": ["assets/*"],
+      "resources": ["assets/*", "offscreen.html", "offscreen.js", "permissions.html", "permissions.js"],
       "matches": ["<all_urls>"]
     }
   ]

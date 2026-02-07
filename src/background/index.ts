@@ -1,4 +1,4 @@
-console.log('SOFLIA Agent Background Service Worker running');
+console.log('Soflia Agent Background Service Worker running');
 
 // Store pending selection to send to popup when it opens
 let pendingSelection: { action: string; text: string; prompt: string } | null = null;
@@ -36,14 +36,14 @@ let meetingState: MeetingState | null = null;
 
 // Open side panel on icon click (runs every time the service worker starts)
 chrome.sidePanel.setPanelBehavior({ openPanelOnActionClick: true })
-  .catch((error) => console.error('setPanelBehavior:', error));
+  .catch((error: any) => console.error('setPanelBehavior:', error));
 
 chrome.runtime.onInstalled.addListener(() => {
-  console.log('SOFLIA Agent installed');
+  console.log('Soflia Agent installed');
 
   // Inject content script into all existing tabs
-  chrome.tabs.query({}, (tabs) => {
-    tabs.forEach((tab) => {
+  chrome.tabs.query({}, (tabs: any[]) => {
+    tabs.forEach((tab: any) => {
       if (tab.id && tab.url && isInjectableUrl(tab.url)) {
         injectContentScript(tab.id);
       }
@@ -89,7 +89,7 @@ async function injectContentScript(tabId: number) {
 }
 
 // Listen for tab updates (navigation)
-chrome.tabs.onUpdated.addListener((tabId, changeInfo, tab) => {
+chrome.tabs.onUpdated.addListener((tabId: number, changeInfo: any, tab: any) => {
   // Inject when page finishes loading
   if (changeInfo.status === 'complete' && tab.url && isInjectableUrl(tab.url)) {
     // Remove from injected set since page reloaded
@@ -99,12 +99,12 @@ chrome.tabs.onUpdated.addListener((tabId, changeInfo, tab) => {
 });
 
 // Clean up when tab is closed
-chrome.tabs.onRemoved.addListener((tabId) => {
+chrome.tabs.onRemoved.addListener((tabId: number) => {
   injectedTabs.delete(tabId);
 });
 
 // Handle messages from content script
-chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
+chrome.runtime.onMessage.addListener((message: any, sender: any, sendResponse: any) => {
   // Handle ping from content script to confirm it's running
   if (message.action === 'ping') {
     sendResponse({ pong: true });
@@ -112,6 +112,40 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
       injectedTabs.add(sender.tab.id);
     }
     return true;
+  }
+
+  // ============================================
+  // OFFSCREEN AUDIO RELAY (for Live API microphone)
+  // ============================================
+  // The offscreen document sends audio data to the background script.
+  // We need to relay it to the sidepanel/popup where AudioCapture is listening.
+  if (message.type === 'OFFSCREEN_AUDIO_DATA') {
+    // Log occasionally to track flow
+    if (Math.random() < 0.05) {
+      console.log('Background: Relaying audio chunk, size:', message.data?.length || 0);
+    }
+    // Broadcast to all extension views (sidepanel, popup, etc.)
+    chrome.runtime.sendMessage(message).catch(() => {
+      // No receivers open, ignore
+    });
+    return false; // No async response needed
+  }
+
+  // ============================================
+  // SCREENSHOT CAPTURE (for Web Agent)
+  // ============================================
+  if (message.type === 'CAPTURE_SCREENSHOT') {
+    // captureVisibleTab must be called from the service worker
+    const windowId = sender.tab?.windowId ?? chrome.windows.WINDOW_ID_CURRENT;
+    chrome.tabs.captureVisibleTab(windowId, { format: 'jpeg', quality: 80 }, (dataUrl: string) => {
+      if (chrome.runtime.lastError) {
+        console.warn('Screenshot capture failed:', chrome.runtime.lastError.message);
+        sendResponse({ screenshot: null });
+      } else {
+        sendResponse({ screenshot: dataUrl });
+      }
+    });
+    return true; // async response
   }
 
   if (message.type === 'SELECTION_ACTION') {
@@ -124,7 +158,7 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
     console.log('Selection action received:', message.action);
 
     // Open the side panel
-    chrome.tabs.query({ active: true, currentWindow: true }, async (tabs) => {
+    chrome.tabs.query({ active: true, currentWindow: true }, async (tabs: any[]) => {
       if (tabs[0]?.id) {
         try {
           await chrome.sidePanel.open({ tabId: tabs[0].id });
@@ -280,11 +314,11 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
   // When popup requests transcription start, find the Meet tab and tell it to start
   if (message.type === 'START_MEET_TRANSCRIPTION') {
     console.log('Background: Popup requesting transcription start');
-    chrome.tabs.query({ url: 'https://meet.google.com/*' }, (tabs) => {
-      const meetTab = tabs.find(t => t.id && t.url && /\/[a-z]{3}-[a-z]{4}-[a-z]{3}/i.test(t.url));
+    chrome.tabs.query({ url: 'https://meet.google.com/*' }, (tabs: any[]) => {
+      const meetTab = tabs.find((t: any) => t.id && t.url && /\/[a-z]{3}-[a-z]{4}-[a-z]{3}/i.test(t.url));
       if (meetTab && meetTab.id) {
         console.log('Background: Forwarding startMeetTranscription to tab', meetTab.id);
-        chrome.tabs.sendMessage(meetTab.id, { action: 'startMeetTranscription' }, (resp) => {
+        chrome.tabs.sendMessage(meetTab.id, { action: 'startMeetTranscription' }, (resp: any) => {
           console.log('Background: Content script responded:', resp);
           sendResponse({ sent: true, tabId: meetTab.id });
         });
@@ -300,7 +334,7 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
 });
 
 // Clean up meeting state when meeting tab is closed
-chrome.tabs.onRemoved.addListener((tabId) => {
+chrome.tabs.onRemoved.addListener((tabId: number) => {
   injectedTabs.delete(tabId);
 
   // Clear meeting state if meeting tab was closed

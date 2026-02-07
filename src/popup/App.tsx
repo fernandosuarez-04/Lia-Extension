@@ -10,7 +10,6 @@ import { FeedbackModal as _FeedbackModal } from './FeedbackModal';
 import { MapViewer } from '../components/MapViewer';
 import { ProjectHub } from '../components/ProjectHub';
 import { MeetingPanel } from '../components/MeetingPanel';
-import { needsComputerUse } from '../prompts';
 
 interface GroundingSource {
   uri: string;
@@ -73,7 +72,7 @@ function App() {
       <div style={{ display: 'flex', justifyContent: 'center', alignItems: 'center', height: '100vh', background: 'var(--bg-dark-main)', color: 'var(--color-text-primary)' }}>
         <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', gap: '8px' }}>
           <div style={{ width: '24px', height: '24px', borderRadius: '50%', border: '2px solid var(--color-accent)', borderTopColor: 'transparent', animation: 'spin 1s linear infinite' }} />
-          <span style={{ fontSize: '13px', opacity: 0.8 }}>Iniciando SOFLIA...</span>
+          <span style={{ fontSize: '13px', opacity: 0.8 }}>Iniciando Soflia...</span>
           <style>{`@keyframes spin { to { transform: rotate(360deg); } }`}</style>
         </div>
       </div>
@@ -175,6 +174,7 @@ function App() {
   const [selectedImages, setSelectedImages] = useState<string[]>([]);
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
+  const textareaRef = useRef<HTMLTextAreaElement>(null);
   const mediaRecorderRef = useRef<MediaRecorder | null>(null);
 
   // Live API States
@@ -254,6 +254,7 @@ function App() {
   const [isDeepResearch, setIsDeepResearch] = useState(false);
   const [isImageGenMode, setIsImageGenMode] = useState(false);
   const [isPromptOptimizerMode, setIsPromptOptimizerMode] = useState(false);
+  const [isWebAgentMode, setIsWebAgentMode] = useState(false);
   const [targetAI, setTargetAI] = useState<'chatgpt' | 'claude' | 'gemini' | null>(null);
   const [researchStep, setResearchStep] = useState<string>('Iniciando...');
 
@@ -318,6 +319,15 @@ function App() {
 
   // Avatar URL for extension
   const liaAvatar = chrome.runtime.getURL('assets/lia-avatar.png');
+
+  // Auto-resize textarea
+  useLayoutEffect(() => {
+    if (textareaRef.current) {
+      textareaRef.current.style.height = 'auto'; // Reset height
+      const newHeight = Math.min(textareaRef.current.scrollHeight, 150);
+      textareaRef.current.style.height = `${Math.max(newHeight, 24)}px`;
+    }
+  }, [inputValue]);
 
   const scrollToBottom = () => {
     messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
@@ -797,15 +807,94 @@ function App() {
       
       mediaRecorder.onstop = async () => {
         const audioBlob = new Blob(audioChunks, { type: 'audio/webm' });
-        // TODO: Send to speech-to-text API
         console.log('Audio recorded:', audioBlob);
         stream.getTracks().forEach(track => track.stop());
+        
+        // Transcribe audio using Gemini
+        try {
+          setIsLoading(true);
+          
+          // Convert blob to base64
+          const reader = new FileReader();
+          const base64Promise = new Promise<string>((resolve, reject) => {
+            reader.onloadend = () => {
+              const base64 = (reader.result as string).split(',')[1];
+              resolve(base64);
+            };
+            reader.onerror = reject;
+            reader.readAsDataURL(audioBlob);
+          });
+          
+          const base64Audio = await base64Promise;
+          
+          // Use Gemini to transcribe the audio
+          const { GoogleGenerativeAI } = await import('@google/generative-ai');
+          const { getApiKeyWithCache } = await import('../services/api-keys');
+          const { GOOGLE_API_KEY, MODELS } = await import('../config');
+          
+          let apiKey = await getApiKeyWithCache('google');
+          if (!apiKey) apiKey = GOOGLE_API_KEY;
+          
+          if (!apiKey) {
+            throw new Error('API key no configurada');
+          }
+          
+          const genAI = new GoogleGenerativeAI(apiKey);
+          const model = genAI.getGenerativeModel({ model: MODELS.PRIMARY });
+          
+          // Send audio with transcription prompt
+          const result = await model.generateContent([
+            {
+              inlineData: {
+                mimeType: 'audio/webm',
+                data: base64Audio
+              }
+            },
+            { text: 'Transcribe este audio exactamente como se dice, sin añadir comentarios ni explicaciones. Solo devuelve el texto transcrito.' }
+          ]);
+          
+          const transcribedText = result.response.text().trim();
+          
+          if (transcribedText) {
+            // Put transcribed text in input field for user to review
+            setInputValue(transcribedText);
+            console.log('Audio transcribed:', transcribedText);
+          } else {
+            console.warn('No transcription returned');
+            setMessages(prev => [...prev, {
+              id: crypto.randomUUID(),
+              role: 'model',
+              text: 'No se pudo transcribir el audio. Por favor, intenta de nuevo hablando más claro.',
+              timestamp: Date.now()
+            }]);
+          }
+        } catch (err: any) {
+          console.error('Transcription error:', err);
+          setMessages(prev => [...prev, {
+            id: crypto.randomUUID(),
+            role: 'model',
+            text: `**Error de transcripción**\n\n${err.message || 'No se pudo transcribir el audio.'}`,
+            timestamp: Date.now()
+          }]);
+        } finally {
+          setIsLoading(false);
+        }
       };
       
       mediaRecorder.start();
       setIsRecording(true);
-    } catch (err) {
+    } catch (err: any) {
       console.error('Error accessing microphone:', err);
+      // Open permission page if access denied or generic error in extension popup context
+      chrome.tabs.create({ url: chrome.runtime.getURL('permissions.html') });
+      
+      // Optionally notify user
+      setMessages(prev => [...prev, {
+        id: crypto.randomUUID(),
+        role: 'model',
+        text: '**Permiso de micrófono requerido**\n\nSe ha abierto una nueva pestaña para autorizar el acceso al micrófono. Por favor, acepta el permiso y vuelve a intentar.',
+        timestamp: Date.now()
+      }]);
     }
   };
 
@@ -834,6 +923,25 @@ function App() {
 
   const removeImage = (index: number) => {
     setSelectedImages(prev => prev.filter((_, i) => i !== index));
+  };
+
+  // Handle Paste (Images)
+  const handlePaste = (e: React.ClipboardEvent) => {
+    const items = e.clipboardData.items;
+    for (const item of items) {
+      if (item.type.indexOf('image') !== -1) {
+        e.preventDefault();
+        const blob = item.getAsFile();
+        if (blob) {
+          const reader = new FileReader();
+          reader.onload = (event) => {
+            const base64 = event.target?.result as string;
+            setSelectedImages(prev => [...prev, base64]);
+          };
+          reader.readAsDataURL(blob);
+        }
+      }
+    }
   };
 
   // Copy to Clipboard with visual feedback
@@ -1015,7 +1123,7 @@ function App() {
       setMessages(prev => [...prev, {
         id: 'live-connecting',
         role: 'model',
-        text: '🔄 **Conectando a Live API...**\n\nEstableciendo conexión de audio en tiempo real.',
+        text: '**Conectando a Live API...**\n\nEstableciendo conexión de audio en tiempo real.',
         timestamp: Date.now()
       }]);
 
@@ -1049,7 +1157,7 @@ function App() {
           setMessages(prev => [...prev, {
             id: crypto.randomUUID(),
             role: 'model',
-            text: `⚠️ **Error de Conversación en Vivo**\n\n${errorMsg}`,
+            text: `**Error de conversación en vivo**\n\n${errorMsg}`,
             timestamp: Date.now()
           }]);
           stopLiveSession();
@@ -1071,7 +1179,7 @@ function App() {
       setMessages(prev => prev.filter(m => m.id !== 'live-connecting').concat({
         id: crypto.randomUUID(),
         role: 'model',
-        text: '🎤 **Conversación en vivo activada**\n\nAhora puedes hablar conmigo en tiempo real. Presiona el botón de micrófono (verde) para comenzar a hablar.',
+        text: '**Conversación en vivo activada**\n\nAhora puedes hablar en tiempo real. Presiona el botón de micrófono para comenzar.',
         timestamp: Date.now()
       }));
 
@@ -1132,8 +1240,12 @@ function App() {
         audioCapturRef.current.stop();
         audioCapturRef.current = null;
       }
+      // Signal end of audio turn so model responds
+      if (liveClientRef.current) {
+        liveClientRef.current.endAudioTurn();
+      }
       setIsLiveMicActive(false);
-      console.log("Live microphone stopped");
+      console.log("Live microphone stopped, signaled end of turn");
     } else {
       // Start microphone capture
       try {
@@ -1148,10 +1260,16 @@ function App() {
         console.log("Live microphone started");
       } catch (e: any) {
         console.error("Failed to start microphone:", e);
+        
+        // Open permissions page
+        chrome.tabs.create({ url: chrome.runtime.getURL('permissions.html') });
+
+        // Use the detailed error message from AudioCapture if available
+        const errorMessage = e?.message || 'No se pudo acceder al micrófono. Asegúrate de dar permisos.';
         setMessages(prev => [...prev, {
           id: crypto.randomUUID(),
           role: 'model',
-          text: `⚠️ **Error de Micrófono**\n\nNo se pudo acceder al micrófono. Asegúrate de dar permisos.`,
+          text: `**Error de micrófono**\n\n${errorMessage}\n\n**Solución:**\nSe ha abierto una nueva pestaña para autorizar el acceso al micrófono. Acepta el permiso y vuelve a intentar.`,
           timestamp: Date.now()
         }]);
       }
@@ -1210,7 +1328,7 @@ function App() {
                     const lastMsg = chat.messages[chat.messages.length - 1];
                     const prevMsg = chat.messages[chat.messages.length - 2];
                     if (lastMsg && prevMsg && prevMsg.role === 'user') {
-                        return `Tema: ${chat.title}\nUsuario: ${prevMsg.text.substring(0, 100)}...\nSOFLIA: ${lastMsg.text?.substring(0, 100)}...`;
+                        return `Tema: ${chat.title}\nUsuario: ${prevMsg.text.substring(0, 100)}...\nSoflia: ${lastMsg.text?.substring(0, 100)}...`;
                     }
                     return null;
                 })
@@ -1287,54 +1405,11 @@ function App() {
         const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
 
         if (tab?.url?.startsWith('chrome://') || tab?.url?.startsWith('edge://') || tab?.url?.startsWith('about:')) {
-          pageContext = '[ERROR: Esta es una página protegida del navegador. SOFLIA no puede acceder al contenido de páginas chrome://, edge:// o about:. Por favor navega a una página web normal para que pueda analizarla.]';
+          pageContext = '[ERROR: Esta es una página protegida del navegador. Soflia no puede acceder al contenido de páginas chrome://, edge:// o about:. Por favor navega a una página web normal para que pueda analizarla.]';
         } else if (tab?.id) {
-          const response = await chrome.tabs.sendMessage(tab.id, { action: "getStructuredDOM" });
-          if (response?.dom) {
-            const dom = response.dom;
-            
-            // CRITICAL: Check if this is a computer use request
-            // If so, send FULL DOM with interactive elements so AI can navigate
-            const isComputerUseRequest = needsComputerUse(apiMessage);
-            
-            if (isComputerUseRequest && dom.interactiveElements && dom.interactiveElements.length > 0) {
-              // Computer Use: Send full structured DOM with indexed elements
-              console.log('🖥️ Computer Use detected - sending full DOM with', dom.interactiveElements.length, 'interactive elements');
-              
-              // DEBUG: Log first 20 elements to see what the model receives
-              console.log('📋 First 20 elements being sent to model:');
-              dom.interactiveElements.slice(0, 20).forEach((el: any) => {
-                console.log(`  [${el.index}] ${el.tag} "${el.text?.substring(0,30) || ''}" ${el.ariaLabel ? `(${el.ariaLabel})` : ''}`);
-              });
-              
-              // Format interactive elements for the model
-              const elementsText = dom.interactiveElements.map((el: any) => {
-                let desc = `[${el.index}] ${el.tag}`;
-                if (el.text) desc += ` "${el.text.substring(0, 60)}"`;
-                if (el.ariaLabel) desc += ` (aria-label: "${el.ariaLabel}")`;
-                if (el.tooltip) desc += ` (tooltip: "${el.tooltip}")`;
-                if (el.attributes?.href) desc += ` -> ${el.attributes.href.substring(0, 50)}`;
-                if (el.attributes?.type) desc += ` [type=${el.attributes.type}]`;
-                if (el.position) desc += ` {visible: ${el.position.visible}}`;
-                return desc;
-              }).join('\n');
-              
-              pageContext = `URL: ${dom.url || tab.url}
-Título: ${dom.title || ''}
-Viewport: ${dom.viewport?.width}x${dom.viewport?.height}
-
-=== ELEMENTOS INTERACTIVOS (usa el INDEX para acciones) ===
-${elementsText}
-
-=== CONTENIDO DE LA PÁGINA ===
-${dom.mainContent || '[Sin contenido principal]'}`;
-            } else if (dom.mainContent) {
-              // Regular analysis: send only the content, not interactive elements
-              pageContext = `URL: ${dom.url || tab.url}\nTítulo: ${dom.title || ''}\n\nCONTENIDO PRINCIPAL:\n${dom.mainContent}`;
-            } else {
-              // Fallback: send minimal info
-              pageContext = `URL: ${dom.url || tab.url}\nTítulo: ${dom.title || ''}\n\n[No se encontró contenido principal]`;
-            }
+          const response = await chrome.tabs.sendMessage(tab.id, { action: "GET_DOM_CONTEXT" });
+          if (response?.context) {
+            pageContext = response.context;
           } else {
             pageContext = '[INFO: No se pudo obtener información de la página. Puede que el content script no esté cargado. Intenta recargar la página.]';
           }
@@ -1518,6 +1593,70 @@ ${dom.mainContent || '[Sin contenido principal]'}`;
         return;
       }
 
+      // Web Agent mode - autonomous browser control
+      // Triggers either by explicit mode toggle OR by auto-detecting browser action intent
+      const { needsWebAgent } = await import('../prompts');
+      const shouldUseWebAgent = isWebAgentMode || needsWebAgent(apiMessage);
+
+      if (shouldUseWebAgent) {
+        console.log('🤖 Web Agent activated:', isWebAgentMode ? 'manual mode' : 'auto-detected intent');
+        try {
+          const { runWebAgent } = await import('../services/web-agent');
+
+          await runWebAgent(apiMessage, {
+            onMessage: (text) => {
+              setMessages((prev) =>
+                prev.map(msg =>
+                  msg.id === aiMessageId
+                    ? { ...msg, text: (msg.text ? msg.text + '\n' : '') + text }
+                    : msg
+                )
+              );
+            },
+            onActionStart: (description) => {
+              setMessages((prev) =>
+                prev.map(msg =>
+                  msg.id === aiMessageId
+                    ? { ...msg, text: (msg.text ? msg.text + '\n' : '') + `*${description}...*` }
+                    : msg
+                )
+              );
+            },
+            onComplete: (summary) => {
+              setMessages((prev) =>
+                prev.map(msg =>
+                  msg.id === aiMessageId
+                    ? { ...msg, text: (msg.text ? msg.text + '\n\n' : '') + summary }
+                    : msg
+                )
+              );
+            },
+            onError: (error) => {
+              setMessages((prev) =>
+                prev.map(msg =>
+                  msg.id === aiMessageId
+                    ? { ...msg, text: `Error del agente web: ${error}` }
+                    : msg
+                )
+              );
+            }
+          });
+        } catch (error) {
+          console.error('Web Agent error:', error);
+          const errorMessage = error instanceof Error ? error.message : 'Error desconocido';
+          setMessages((prev) =>
+            prev.map(msg =>
+              msg.id === aiMessageId
+                ? { ...msg, text: `Error del agente web: ${errorMessage}` }
+                : msg
+            )
+          );
+        } finally {
+          setIsLoading(false);
+        }
+        return;
+      }
+
       // Determine thinking type based on model (Gemini 3 uses 'level', Gemini 2.5 uses 'budget')
       const currentModelConfig = MODEL_OPTIONS.find(m => m.id === preferredPrimaryModel);
       const thinkingType = currentModelConfig?.thinkingType || 'level';
@@ -1590,75 +1729,6 @@ ${dom.mainContent || '[Sin contenido principal]'}`;
         }
       }
 
-      // Detectar y ejecutar acciones
-      const actionPattern = /\[ACTION:(\w+):(\d+)(?::([^\]]+))?\]/g;
-      let match;
-
-      console.log('=== DETECCIÓN DE ACCIONES ===');
-      console.log('Texto completo:', fullText);
-
-      while ((match = actionPattern.exec(fullText)) !== null) {
-        const actionType = match[1];
-        const elementIndex = parseInt(match[2]);
-        const actionValue = match[3];
-
-        console.log(`✓ Acción encontrada: ${actionType}, índice: ${elementIndex}, valor: ${actionValue}`);
-
-        try {
-          // Obtener la pestaña activa de la ventana actual (no lastFocusedWindow porque el popup puede ser la ventana activa)
-          let tabs = await chrome.tabs.query({ active: true, currentWindow: true });
-          console.log('Pestañas (currentWindow):', tabs.length, tabs.map(t => ({ id: t.id, url: t.url?.substring(0, 50) })));
-          
-          // Si no encuentra, intentar con todas las pestañas activas
-          if (tabs.length === 0) {
-            tabs = await chrome.tabs.query({ active: true });
-            console.log('Pestañas (todas activas):', tabs.length);
-          }
-          
-          // Si aún no hay, buscar cualquier pestaña en la ventana actual
-          if (tabs.length === 0) {
-            tabs = await chrome.tabs.query({ currentWindow: true });
-            console.log('Pestañas (currentWindow, todas):', tabs.length);
-          }
-
-          // Filtrar para obtener la pestaña real (no la del side panel ni chrome-extension)
-          let tab = tabs.find(t => t.url && !t.url.startsWith('chrome-extension://') && !t.url.startsWith('chrome://'));
-          
-          // Si no encontramos tab válido, buscar explícitamente en todas las ventanas
-          if (!tab) {
-            const allTabs = await chrome.tabs.query({});
-            console.log('Buscando en todas las pestañas:', allTabs.length);
-            // Priorizar Gmail, luego cualquier otra página
-            tab = allTabs.find(t => t.url?.includes('mail.google.com')) || 
-                  allTabs.find(t => t.url && !t.url.startsWith('chrome'));
-          }
-
-          if (!tab) {
-            console.error('No se encontró pestaña válida en ninguna búsqueda');
-            continue;
-          }
-
-          console.log('Tab seleccionada:', tab.id, tab.url?.substring(0, 80));
-
-          if (tab.id) {
-            console.log('Enviando mensaje al content script...');
-            const response = await chrome.tabs.sendMessage(tab.id, {
-              action: "executeAction",
-              actionData: {
-                type: actionType,
-                index: elementIndex,
-                value: actionValue
-              }
-            });
-            console.log('✓ Respuesta del content script:', response);
-          }
-        } catch (actionError) {
-          console.error('✗ Error ejecutando acción:', actionError);
-        }
-      }
-
-      console.log('=== FIN DETECCIÓN ===');
-
 
     } catch (error) {
       console.error('Error:', error);
@@ -1729,7 +1799,7 @@ ${dom.mainContent || '[Sin contenido principal]'}`;
           {/* Avatar - smaller */}
           <img
             src={liaAvatar}
-            alt="SOFLIA"
+            alt="Soflia"
             style={{
               width: '28px',
               height: '28px',
@@ -1748,7 +1818,7 @@ ${dom.mainContent || '[Sin contenido principal]'}`;
               color: 'var(--color-white)',
               flexShrink: 0
             }}>
-              SOFLIA
+              Soflia
             </span>
 
             {isLiveActive && (
@@ -1804,7 +1874,7 @@ ${dom.mainContent || '[Sin contenido principal]'}`;
         {/* Right: Mode badge + Settings - all inline */}
         <div style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
           {/* Active Mode Indicator - compact pill */}
-          {(isDeepResearch || isImageGenMode || isPromptOptimizerMode) && (
+          {(isDeepResearch || isImageGenMode || isPromptOptimizerMode || isWebAgentMode) && (
             <div style={{
               display: 'flex',
               alignItems: 'center',
@@ -1813,12 +1883,14 @@ ${dom.mainContent || '[Sin contenido principal]'}`;
               background: isDeepResearch ? 'rgba(0, 212, 179, 0.12)' :
                          isImageGenMode ? 'rgba(168, 85, 247, 0.12)' :
                          isPromptOptimizerMode ? 'rgba(251, 191, 36, 0.12)' :
+                         isWebAgentMode ? 'rgba(59, 130, 246, 0.12)' :
                          'rgba(59, 130, 246, 0.12)',
               borderRadius: '8px',
               fontSize: '10px',
               color: isDeepResearch ? '#00d4b3' :
                      isImageGenMode ? '#a855f7' :
                      isPromptOptimizerMode ? '#fbbf24' :
+                     isWebAgentMode ? '#3b82f6' :
                      '#3b82f6',
               fontWeight: 500
             }}>
@@ -1841,10 +1913,18 @@ ${dom.mainContent || '[Sin contenido principal]'}`;
                   <path d="M16.5 3.5a2.121 2.121 0 0 1 3 3L7 19l-4 1 1-4L16.5 3.5z"></path>
                 </svg>
               )}
+              {isWebAgentMode && (
+                <svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+                  <rect x="2" y="3" width="20" height="14" rx="2" ry="2"></rect>
+                  <line x1="8" y1="21" x2="16" y2="21"></line>
+                  <line x1="12" y1="17" x2="12" y2="21"></line>
+                </svg>
+              )}
               <span className="hide-text-on-compact" style={{ maxWidth: '80px', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
                 {isDeepResearch ? 'Research' :
                  isImageGenMode ? 'Imagen' :
                  isPromptOptimizerMode ? 'Optimizar' :
+                 isWebAgentMode ? 'Web Agent' :
                  ''}
               </span>
               <button
@@ -1852,6 +1932,7 @@ ${dom.mainContent || '[Sin contenido principal]'}`;
                   setIsDeepResearch(false);
                   setIsImageGenMode(false);
                   setIsPromptOptimizerMode(false);
+                  setIsWebAgentMode(false);
                   setTargetAI(null);
                 }}
                 style={{
@@ -2065,6 +2146,7 @@ ${dom.mainContent || '[Sin contenido principal]'}`;
                  setIsPromptOptimizerMode(true);
                  setTargetAI('chatgpt');
              }
+             if (tool === 'web_agent') setIsWebAgentMode(true);
              if (tool === 'live_api') {
                  handleLiveToggle();
                  return; // Live API usually takes over full screen or panel
@@ -2088,7 +2170,7 @@ ${dom.mainContent || '[Sin contenido principal]'}`;
           <div style={{ textAlign: 'center', padding: '40px 20px' }}>
             <img
               src={liaAvatar}
-              alt="SOFLIA"
+              alt="Soflia"
               style={{
                 width: '80px',
                 height: '80px',
@@ -2099,10 +2181,10 @@ ${dom.mainContent || '[Sin contenido principal]'}`;
               }}
             />
             <h2 style={{ fontSize: '20px', margin: '0 0 8px 0', fontWeight: 600, color: 'var(--color-white)' }}>
-              Hola, soy SOFLIA
+              Hola, soy Soflia
             </h2>
             <p style={{ fontSize: '14px', color: 'var(--color-gray-medium)', lineHeight: '1.5', margin: '0 0 24px 0' }}>
-              Tu agente inteligente del ecosistema SOFLIA. ¿En qué puedo ayudarte?
+              Tu agente inteligente del ecosistema Soflia. ¿En qué puedo ayudarte?
             </p>
 
             <div style={{ display: 'flex', flexWrap: 'wrap', gap: '8px', justifyContent: 'center' }}>
@@ -2143,7 +2225,7 @@ ${dom.mainContent || '[Sin contenido principal]'}`;
             {msg.role === 'model' && (
               <img
                 src={liaAvatar}
-                alt="SOFLIA"
+                alt="Soflia"
                 style={{
                   width: '28px',
                   height: '28px',
@@ -2608,7 +2690,7 @@ ${dom.mainContent || '[Sin contenido principal]'}`;
           <div style={{ display: 'flex', gap: '8px', alignItems: 'center' }}>
             <img
               src={liaAvatar}
-              alt="SOFLIA"
+              alt="Soflia"
               style={{ width: '28px', height: '28px', borderRadius: '50%', objectFit: 'cover' }}
             />
             <div style={{
@@ -2959,6 +3041,7 @@ ${dom.mainContent || '[Sin contenido principal]'}`;
                     setIsImageGenMode(!isImageGenMode);
                     setIsDeepResearch(false);
                     setIsPromptOptimizerMode(false);
+                    setIsWebAgentMode(false);
                     setIsPlusMenuOpen(false);
                   }}
                   style={{
@@ -3004,7 +3087,7 @@ ${dom.mainContent || '[Sin contenido principal]'}`;
                     }
                     setIsDeepResearch(false);
                     setIsImageGenMode(false);
-                    // setIsMapsMode has been removed
+                    setIsWebAgentMode(false);
                     setIsPlusMenuOpen(false);
                   }}
                   style={{
@@ -3037,10 +3120,48 @@ ${dom.mainContent || '[Sin contenido principal]'}`;
                   )}
                 </button>
 
-
+                {/* Web Agent */}
+                <button
+                  onClick={() => {
+                    setIsWebAgentMode(!isWebAgentMode);
+                    setIsDeepResearch(false);
+                    setIsImageGenMode(false);
+                    setIsPromptOptimizerMode(false);
+                    setIsPlusMenuOpen(false);
+                  }}
+                  style={{
+                    width: '100%',
+                    display: 'flex',
+                    alignItems: 'center',
+                    gap: '10px',
+                    padding: '10px 12px',
+                    background: isWebAgentMode ? 'rgba(59, 130, 246, 0.15)' : 'transparent',
+                    border: 'none',
+                    borderRadius: '8px',
+                    color: isWebAgentMode ? '#3b82f6' : 'var(--color-white)',
+                    cursor: 'pointer',
+                    fontSize: '13px',
+                    textAlign: 'left'
+                  }}
+                >
+                  <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+                    <rect x="2" y="3" width="20" height="14" rx="2" ry="2"></rect>
+                    <line x1="8" y1="21" x2="16" y2="21"></line>
+                    <line x1="12" y1="17" x2="12" y2="21"></line>
+                  </svg>
+                  <div>
+                    <div style={{ fontWeight: 500 }}>Agente Web</div>
+                    <div style={{ fontSize: '11px', color: 'var(--color-gray-medium)' }}>Controla el navegador</div>
+                  </div>
+                  {isWebAgentMode && (
+                    <svg width="16" height="16" viewBox="0 0 24 24" fill="#3b82f6" style={{ marginLeft: 'auto' }}>
+                      <polyline points="20 6 9 17 4 12" stroke="#3b82f6" strokeWidth="2" fill="none"></polyline>
+                    </svg>
+                  )}
+                </button>
 
                 <div style={{ height: '1px', background: 'var(--border-modal)', margin: '8px 0' }}></div>
-                
+
                 {/* Attach File */}
                 <button
                   onClick={() => {
@@ -3075,14 +3196,11 @@ ${dom.mainContent || '[Sin contenido principal]'}`;
           </div>
 
           <textarea
+            ref={textareaRef}
             value={inputValue}
-            onChange={(e) => {
-                setInputValue(e.target.value);
-                // Auto-resize
-                e.target.style.height = 'auto';
-                e.target.style.height = Math.min(e.target.scrollHeight, 150) + 'px';
-            }}
+            onChange={(e) => setInputValue(e.target.value)}
             onKeyDown={handleKeyDown}
+            onPaste={handlePaste}
             disabled={isLoading || isRecording}
             placeholder={isRecording ? "Escuchando..." : "Escribe un mensaje..."}
             rows={1}
@@ -3098,7 +3216,8 @@ ${dom.mainContent || '[Sin contenido principal]'}`;
               minHeight: '24px',
               maxHeight: '150px',
               padding: '0',
-              lineHeight: '1.5'
+              lineHeight: '1.5',
+              overflowY: 'auto'
             }}
           />
 
@@ -3354,8 +3473,8 @@ ${dom.mainContent || '[Sin contenido principal]'}`;
           justifyContent: 'space-between'
         }}>
           <div style={{ display: 'flex', alignItems: 'center', gap: '10px' }}>
-            <img src={liaAvatar} alt="SOFLIA" style={{ width: '32px', height: '32px', borderRadius: '50%', objectFit: 'cover' }} />
-            <span style={{ fontWeight: 600, color: 'var(--color-white)', fontSize: '15px' }}>SOFLIA</span>
+            <img src={liaAvatar} alt="Soflia" style={{ width: '32px', height: '32px', borderRadius: '50%', objectFit: 'cover' }} />
+            <span style={{ fontWeight: 600, color: 'var(--color-white)', fontSize: '15px' }}>Soflia</span>
           </div>
           <button
             onClick={() => setIsSidebarOpen(false)}
@@ -3661,7 +3780,7 @@ ${dom.mainContent || '[Sin contenido principal]'}`;
               <path d="M20 21v-2a4 4 0 0 0-4-4H8a4 4 0 0 0-4 4v2"></path>
               <circle cx="12" cy="7" r="4"></circle>
             </svg>
-            Personalizar SOFLIA
+            Personalizar Soflia
           </button>
 
 

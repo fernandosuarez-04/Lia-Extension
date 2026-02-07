@@ -163,6 +163,12 @@ export class LiveClient {
                   }
                 }
               },
+              // Enable automatic voice activity detection so the model knows when user stops speaking
+              realtimeInputConfig: {
+                automaticActivityDetection: {
+                  disabled: false  // VAD enabled
+                }
+              },
               systemInstruction: {
                 parts: [{
                   text: "Eres Lia, una asistente de productividad amigable y eficiente. Responde siempre en español de forma concisa y útil. Cuando el usuario pregunte sobre información actual, noticias, clima, eventos recientes o cualquier dato que requiera información actualizada, usa la herramienta de búsqueda de Google para obtener información precisa y actual."
@@ -484,6 +490,19 @@ export class LiveClient {
     });
   }
 
+  // Signal end of audio input turn (when user manually stops mic)
+  // This tells the model to generate a response based on audio received so far
+  endAudioTurn() {
+    if (!this.isReady()) return;
+    
+    console.log("Live API: Signaling end of audio turn");
+    this.send({
+      clientContent: {
+        turnComplete: true
+      }
+    });
+  }
+
   isReady(): boolean {
     return this.isConnected && this.ws?.readyState === WebSocket.OPEN && this.setupComplete;
   }
@@ -514,80 +533,115 @@ export class LiveClient {
   }
 }
 
-// Helper class to capture microphone audio in correct format
+// Helper class to capture microphone audio using Offscreen Document
+// This is required for Manifest V3 extensions where getUserMedia doesn't work in popups/side panels
 export class AudioCapture {
-  private audioContext: AudioContext | null = null;
-  private mediaStream: MediaStream | null = null;
-  private processor: ScriptProcessorNode | null = null;
   private onAudioData: ((base64: string) => void) | null = null;
+  private isCapturing: boolean = false;
+  private messageListener: ((message: any) => void) | null = null;
 
   async start(onAudioData: (base64: string) => void): Promise<void> {
     this.onAudioData = onAudioData;
 
     try {
-      // Request microphone with specific constraints
-      this.mediaStream = await navigator.mediaDevices.getUserMedia({
-        audio: {
-          sampleRate: 16000,
-          channelCount: 1,
-          echoCancellation: true,
-          noiseSuppression: true
-        }
-      });
-
-      // Create audio context at 16kHz
-      this.audioContext = new AudioContext({ sampleRate: 16000 });
-      const source = this.audioContext.createMediaStreamSource(this.mediaStream);
-
-      // Use ScriptProcessor for raw PCM access (deprecated but widely supported)
-      this.processor = this.audioContext.createScriptProcessor(4096, 1, 1);
-
-      this.processor.onaudioprocess = (e) => {
-        const inputData = e.inputBuffer.getChannelData(0);
-
-        // Convert Float32 to Int16 PCM
-        const pcmData = new Int16Array(inputData.length);
-        for (let i = 0; i < inputData.length; i++) {
-          const s = Math.max(-1, Math.min(1, inputData[i]));
-          pcmData[i] = s < 0 ? s * 0x8000 : s * 0x7FFF;
-        }
-
-        // Convert to base64
-        const bytes = new Uint8Array(pcmData.buffer);
-        let binary = '';
-        for (let i = 0; i < bytes.length; i++) {
-          binary += String.fromCharCode(bytes[i]);
-        }
-        const base64 = btoa(binary);
-
-        if (this.onAudioData) {
-          this.onAudioData(base64);
+      // Setup listener for audio data from offscreen document (relayed via background)
+      let audioChunkCount = 0;
+      this.messageListener = (message: any) => {
+        if (message.type === 'OFFSCREEN_AUDIO_DATA' && this.onAudioData) {
+          audioChunkCount++;
+          // Log every 20th chunk to avoid spam
+          if (audioChunkCount % 20 === 1) {
+            console.log(`AudioCapture: Received chunk #${audioChunkCount}, size: ${message.data?.length || 0}`);
+          }
+          this.onAudioData(message.data);
         }
       };
+      chrome.runtime.onMessage.addListener(this.messageListener);
+      console.log("AudioCapture: Message listener registered");
 
-      source.connect(this.processor);
-      this.processor.connect(this.audioContext.destination);
+      // Create offscreen document if it doesn't exist
+      await this.setupOffscreenDocument();
 
-      console.log("AudioCapture: Started");
-    } catch (e) {
+      // Tell offscreen document to start capturing
+      const response = await chrome.runtime.sendMessage({
+        target: 'offscreen',
+        action: 'start-audio-capture'
+      });
+
+      if (!response?.success) {
+        throw new Error(response?.error || 'Failed to start audio capture in offscreen document');
+      }
+
+      this.isCapturing = true;
+      console.log("AudioCapture: Started successfully via offscreen document");
+
+    } catch (e: any) {
       console.error("AudioCapture: Failed to start", e);
-      throw e;
+      
+      // Cleanup listener on failure
+      if (this.messageListener) {
+        chrome.runtime.onMessage.removeListener(this.messageListener);
+        this.messageListener = null;
+      }
+      
+      // Provide more helpful error messages
+      let errorMessage = 'Error al acceder al micrófono';
+      
+      if (e.message?.includes('NotAllowedError') || e.message?.includes('Permission')) {
+        errorMessage = 'Permiso de micrófono denegado. Por favor, permite el acceso al micrófono.';
+      } else if (e.message?.includes('NotFound')) {
+        errorMessage = 'No se encontró ningún micrófono. Por favor, conecta un micrófono y vuelve a intentar.';
+      } else if (e.message) {
+        errorMessage = `Error de micrófono: ${e.message}`;
+      }
+      
+      const error = new Error(errorMessage);
+      error.name = 'AudioCaptureError';
+      throw error;
     }
   }
 
+  private async setupOffscreenDocument(): Promise<void> {
+    // Check if offscreen document already exists
+    const existingContexts = await chrome.runtime.getContexts({
+      contextTypes: [chrome.runtime.ContextType.OFFSCREEN_DOCUMENT as any]
+    });
+
+    if (existingContexts.length > 0) {
+      console.log("AudioCapture: Offscreen document already exists");
+      return;
+    }
+
+    // Create a new offscreen document
+    console.log("AudioCapture: Creating offscreen document...");
+    await chrome.offscreen.createDocument({
+      url: 'offscreen.html',
+      reasons: [chrome.offscreen.Reason.USER_MEDIA as any],
+      justification: 'Microphone access for voice input'
+    });
+    
+    // Wait a bit for the document to be ready
+    await new Promise(resolve => setTimeout(resolve, 100));
+    console.log("AudioCapture: Offscreen document created");
+  }
+
   stop() {
-    if (this.processor) {
-      this.processor.disconnect();
-      this.processor = null;
+    if (this.messageListener) {
+      chrome.runtime.onMessage.removeListener(this.messageListener);
+      this.messageListener = null;
     }
-    if (this.mediaStream) {
-      this.mediaStream.getTracks().forEach(t => t.stop());
-      this.mediaStream = null;
+
+    if (this.isCapturing) {
+      // Tell offscreen document to stop capturing
+      chrome.runtime.sendMessage({
+        target: 'offscreen',
+        action: 'stop-audio-capture'
+      }).catch(() => {
+        // Offscreen might already be closed
+      });
     }
-    if (this.audioContext) {
-      this.audioContext.close();
-      this.audioContext = null;
-    }
+
+    this.isCapturing = false;
     this.onAudioData = null;
     console.log("AudioCapture: Stopped");
   }

@@ -473,7 +473,7 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({ isOpen, onClose, u
                                             Seguridad de API Keys
                                         </div>
                                         <div style={{ fontSize: '12px', color: 'var(--color-gray-medium)', lineHeight: 1.5 }}>
-                                            Tu API key se guarda de forma segura en tu cuenta de SOFLIA.
+                                            Tu API key se guarda de forma segura en tu cuenta de Soflia.
                                             Solo tú puedes ver y usar tu propia API key.
                                         </div>
                                     </div>

@@ -8,7 +8,7 @@
 // ============================================
 // PRIMARY CHAT PROMPT
 // ============================================
-export const PRIMARY_CHAT_PROMPT = `Eres SOFLIA Agent, un asistente de productividad experto e inteligente integrado en un navegador web.
+export const PRIMARY_CHAT_PROMPT = `Eres Soflia Agent, un asistente de productividad experto e inteligente integrado en un navegador web.
 
 ## Tu Personalidad:
 - Eres profesional, analítica y extremadamente detallada
@@ -17,10 +17,10 @@ export const PRIMARY_CHAT_PROMPT = `Eres SOFLIA Agent, un asistente de productiv
 - SIEMPRE usa Google Search para fundamentar tus respuestas con fuentes actualizadas
 
 ## REGLA CRÍTICA - DÓNDE MOSTRAR TUS RESPUESTAS:
-Tu respuesta se muestra directamente en el CHAT DE SOFLIA (el panel donde el usuario te escribe).
+Tu respuesta se muestra directamente en el CHAT DE Soflia (el panel donde el usuario te escribe).
 NUNCA uses formato [ACTION:...] bajo ninguna circunstancia.
 NUNCA escribas ni teclees nada en la página web del usuario.
-Para traducciones, resúmenes, explicaciones, análisis - escribe tu respuesta normalmente y aparecerá en SOFLIA.
+Para traducciones, resúmenes, explicaciones, análisis - escribe tu respuesta normalmente y aparecerá en Soflia.
 
 ## Reglas IMPORTANTES:
 1. Responde a lo que el usuario pregunta con el nivel de detalle apropiado.
@@ -298,7 +298,7 @@ ${deepBoost}`;
 export const CONVERSATION_MODES = {
   NORMAL: 'normal',
   DEEP_RESEARCH: 'deep_research',
-  COMPUTER_USE: 'computer_use'
+  WEB_AGENT: 'web_agent'
 } as const;
 
 export type ConversationMode = typeof CONVERSATION_MODES[keyof typeof CONVERSATION_MODES];
