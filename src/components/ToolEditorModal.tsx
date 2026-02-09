@@ -16,6 +16,7 @@ import {
 interface ToolEditorModalProps {
   isOpen: boolean;
   tool?: UserTool | null; // If provided, we're editing
+  initialPromptText?: string; // Pre-fill system prompt with this text (for "Save as Prompt" feature)
   onClose: () => void;
   onSave: (tool: UserTool) => void;
 }
@@ -23,7 +24,7 @@ interface ToolEditorModalProps {
 // Common emoji icons for tools
 const EMOJI_OPTIONS = ['⚙️', '🔧', '💡', '🎯', '📝', '💻', '🎨', '📊', '🔬', '🚀', '⭐', '🎓', '📣', '🤖', '✨', '🧠'];
 
-export function ToolEditorModal({ isOpen, tool, onClose, onSave }: ToolEditorModalProps) {
+export function ToolEditorModal({ isOpen, tool, initialPromptText, onClose, onSave }: ToolEditorModalProps) {
   const [name, setName] = useState('');
   const [description, setDescription] = useState('');
   const [icon, setIcon] = useState('⚙️');
@@ -50,11 +51,12 @@ export function ToolEditorModal({ isOpen, tool, onClose, onSave }: ToolEditorMod
       setDescription('');
       setIcon('⚙️');
       setCategory('');
-      setSystemPrompt('');
+      // Pre-fill system prompt if initialPromptText is provided (from "Save as Prompt")
+      setSystemPrompt(initialPromptText || '');
       setStarterPrompts('');
     }
     setError(null);
-  }, [tool, isOpen]);
+  }, [tool, isOpen, initialPromptText]);
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -111,7 +113,7 @@ export function ToolEditorModal({ isOpen, tool, onClose, onSave }: ToolEditorMod
     <div style={styles.overlay} onClick={onClose}>
       <div style={styles.modal} onClick={e => e.stopPropagation()}>
         <h2 style={styles.title}>
-          {tool ? '✏️ Editar Herramienta' : '➕ Nueva Herramienta'}
+          {tool ? '✏️ Editar Prompt' : initialPromptText ? '💾 Guardar Prompt' : '➕ Nuevo Prompt'}
         </h2>
 
         <form onSubmit={handleSubmit} style={styles.form}>
@@ -231,7 +233,7 @@ export function ToolEditorModal({ isOpen, tool, onClose, onSave }: ToolEditorMod
               style={styles.saveBtn}
               disabled={saving}
             >
-              {saving ? 'Guardando...' : (tool ? 'Guardar Cambios' : 'Crear Herramienta')}
+              {saving ? 'Guardando...' : (tool ? 'Guardar Cambios' : 'Guardar Prompt')}
             </button>
           </div>
         </form>

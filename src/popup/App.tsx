@@ -12,11 +12,13 @@ import { ProjectHub } from '../components/ProjectHub';
 import { MeetingPanel } from '../components/MeetingPanel';
 import { ToolLibrary } from '../components/ToolLibrary';
 import { ToolEditorModal } from '../components/ToolEditorModal';
+import { ProjectSuggestionModal } from '../components/ProjectSuggestionModal';
 import type { Tool, UserTool } from '../services/tools';
 
 interface GroundingSource {
   uri: string;
   title: string;
+  snippet?: string;
 }
 
 interface MapPlace {
@@ -37,7 +39,7 @@ interface Message {
   images?: string[];
   sources?: GroundingSource[];
   places?: MapPlace[];
-  contextData?: { text: string; action: string } | null;
+  contextData?: { text: string; action: string; url?: string; pageTitle?: string } | null;
 }
 
 interface Folder {
@@ -184,6 +186,7 @@ function App() {
   const [isLiveActive, setIsLiveActive] = useState(false);
   const [isLiveConnecting, setIsLiveConnecting] = useState(false);
   const [isLiveMicActive, setIsLiveMicActive] = useState(false);
+  const [isLiveComputerUseEnabled, setIsLiveComputerUseEnabled] = useState(false);
   const liveClientRef = useRef<LiveClient | null>(null);
   const audioCapturRef = useRef<AudioCapture | null>(null);
   const streamRef = useRef<MediaStream | null>(null);
@@ -204,6 +207,7 @@ function App() {
   const [isToolLibraryOpen, setIsToolLibraryOpen] = useState(false);
   const [isToolEditorOpen, setIsToolEditorOpen] = useState(false);
   const [editingTool, setEditingTool] = useState<UserTool | null>(null);
+  const [pendingPromptText, setPendingPromptText] = useState<string>(''); // Text to save as new prompt
 
   // Handler for model change
   const handleModelChange = async (type: 'primary' | 'fallback', modelId: string) => {
@@ -298,6 +302,212 @@ function App() {
   const [movingChatId, setMovingChatId] = useState<string | null>(null);
   const [currentFolderId, setCurrentFolderId] = useState<string | null>(null);
   const [targetFolderId, setTargetFolderId] = useState<string | null>(null);
+
+  // Project Suggestion State
+  const [suggestionData, setSuggestionData] = useState<{
+    isOpen: boolean;
+    type: 'join_existing' | 'create_new';
+    targetName: string;
+    targetId?: string; // ID of existing project if applicable
+    reason: string;
+    relatedChatsCount?: number;
+    chatIdsToGroup?: string[];
+  } | null>(null);
+
+  // Handle Suggestion Confirmation
+  const handleSuggestionConfirm = async () => {
+    if (!suggestionData || !user || !currentChatId) return;
+
+    try {
+      if (suggestionData.type === 'join_existing' && suggestionData.targetId) {
+        // Move current chat to existing project
+        const { error } = await supabase
+          .from('conversations')
+          .update({ folder_id: suggestionData.targetId })
+          .eq('id', currentChatId)
+          .eq('user_id', user.id);
+
+        if (error) throw error;
+
+        // Update local state
+        setCurrentFolderId(suggestionData.targetId);
+        setChatHistory(prev => prev.map(c => 
+          c.id === currentChatId ? { ...c, folderId: suggestionData.targetId } : c
+        ));
+      } 
+      else if (suggestionData.type === 'create_new' && suggestionData.chatIdsToGroup) {
+        // Create new project
+        const { data: newFolder, error: folderError } = await supabase
+          .from('folders')
+          .insert({
+            name: suggestionData.targetName.trim().substring(0, 50),
+            user_id: user.id,
+            description: `Proyecto automático para agrupar conversaciones sobre ${suggestionData.targetName.substring(0, 30)}.`
+          })
+          .select()
+          .single();
+
+        if (folderError || !newFolder) {
+          console.error('Project creation failed:', JSON.stringify(folderError, null, 2));
+          throw folderError;
+        }
+
+        // Move all related chats to new project
+        const { error: moveError } = await supabase
+          .from('conversations')
+          .update({ folder_id: newFolder.id })
+          .in('id', suggestionData.chatIdsToGroup)
+          .eq('user_id', user.id);
+
+        if (moveError) {
+          console.error('Chat migration failed:', JSON.stringify(moveError, null, 2));
+          throw moveError;
+        }
+
+        // Update local state
+        setFolders(prev => [...prev, newFolder]);
+        setChatHistory(prev => prev.map(c => 
+          suggestionData.chatIdsToGroup?.includes(c.id) ? { ...c, folderId: newFolder.id } : c
+        ));
+        setCurrentFolderId(newFolder.id);
+      }
+
+      setSuggestionData(null);
+    } catch (err) {
+      console.error('Error applying suggestion:', JSON.stringify(err, null, 2));
+      // Show user feedback if possible, or just log for now
+    }
+
+  };
+
+  // Handle Renaming Project
+  const handleRenameProject = async (newName: string) => {
+    if (!currentFolderId || !user) return;
+    
+    // Update in DB
+    const { error } = await supabase
+      .from('folders')
+      .update({ name: newName })
+      .eq('id', currentFolderId)
+      .eq('user_id', user.id);
+
+    if (error) {
+      console.error('Error renaming project:', JSON.stringify(error, null, 2));
+      return;
+    }
+
+    // Update local state
+    setFolders(prev => prev.map(f => 
+      f.id === currentFolderId ? { ...f, name: newName } : f
+    ));
+  };
+
+  // Suggestion Intelligence Logic
+  useEffect(() => {
+    // Requirements: Active chat, not in folder, sufficient content
+    if (currentFolderId || !currentChatId || messages.length < 4 || !user) return;
+    
+    // Only analyze after model response
+    const lastMsg = messages[messages.length - 1];
+    if (lastMsg.role !== 'model') return;
+
+    // Prevent annoyance: Don't show if already showing
+    if (suggestionData?.isOpen) return;
+
+    const timer = setTimeout(() => {
+        const chatContent = messages.map(m => m.text).join(' ').toLowerCase();
+        // Remove common stop words for better precision (simplified list)
+        const stopWords = ['para', 'como', 'cuando', 'donde', 'porque', 'pero', 'sobre', 'este', 'esta', 'esto'];
+        const meaningfulConfirm = chatContent.split(/\s+/).filter(w => w.length > 3 && !stopWords.includes(w));
+        const uniqueChatWords = new Set(meaningfulConfirm);
+        
+        // 1. Check Existing Projects with Deep Context
+        let bestMatch: Folder | null = null;
+        let maxScore = 0;
+        let secondBestScore = 0; // To detect ambiguity
+
+        // Pre-calculate project "fingerprints" from chat history to understand what belongs where
+        const projectFingerprints = new Map<string, string>();
+        chatHistory.forEach(c => {
+            if (c.folderId) {
+                const existing = projectFingerprints.get(c.folderId) || '';
+                // Add title to fingerprint
+                projectFingerprints.set(c.folderId, existing + ' ' + c.title.toLowerCase());
+            }
+        });
+
+        folders.forEach(folder => {
+            let score = 0;
+            // Context includes: Name (High weight), Description (Medium), Existing Chats (Low but cumulative)
+            const nameKeywords = folder.name.toLowerCase().split(/\s+/).filter(w => w.length > 3);
+            const descKeywords = (folder.description || '').toLowerCase().split(/\s+/).filter(w => w.length > 3);
+            const historyContext = projectFingerprints.get(folder.id) || '';
+
+            uniqueChatWords.forEach(word => {
+                // Critical: Name Match (+3)
+                if (nameKeywords.some(kw => kw === word || kw.includes(word) || word.includes(kw))) {
+                    score += 3;
+                }
+                // Strong: Description Match (+2)
+                if (descKeywords.includes(word)) {
+                    score += 2;
+                }
+                // Contextual: History Match (+1) - Helps distinguish similar projects like "Marketing Client A" vs "Marketing Client B"
+                if (historyContext.includes(word)) {
+                    score += 1;
+                }
+            });
+            
+            if (score > maxScore) {
+                secondBestScore = maxScore;
+                maxScore = score;
+                bestMatch = folder;
+            } else if (score > secondBestScore) {
+                secondBestScore = score;
+            }
+        });
+
+        // Precision Logic:
+        // 1. Score must be significant (> 4)
+        // 2. Winner must be clearly better than runner-up (avoid ambiguity between similar projects)
+        if (bestMatch && maxScore > 4 && maxScore > (secondBestScore * 1.3)) {
+            setSuggestionData({
+                isOpen: true,
+                type: 'join_existing',
+                targetName: (bestMatch as Folder).name,
+                targetId: (bestMatch as Folder).id,
+                reason: `El contenido coincide fuertemente con el contexto de "${(bestMatch as Folder).name}"`
+            });
+            return;
+        }
+
+        // 2. Check for grouping (New Project)
+        // Only if we have a title for current chat
+        const currentChatSession = chatHistory.find(c => c.id === currentChatId);
+        if (!currentChatSession || !currentChatSession.title || currentChatSession.title === 'Nuevo Chat') return;
+
+        const currentTitleKeywords = currentChatSession.title.toLowerCase().split(' ').filter(w => w.length > 4);
+        if (currentTitleKeywords.length === 0) return;
+
+        const strayChats = chatHistory.filter(c => !c.folderId && c.id !== currentChatId);
+        const similarChats = strayChats.filter(c => {
+            return currentTitleKeywords.some(kw => c.title.toLowerCase().includes(kw));
+        });
+
+        if (similarChats.length >= 2) {
+             setSuggestionData({
+                isOpen: true,
+                type: 'create_new',
+                targetName: currentChatSession.title.split(' ').slice(0, 3).join(' '),
+                reason: 'Tema recurrente en chats sueltos',
+                relatedChatsCount: similarChats.length + 1,
+                chatIdsToGroup: [currentChatId, ...similarChats.map(c => c.id)]
+            });
+        }
+    }, 2000); // Wait 2s after response to be less intrusive
+
+    return () => clearTimeout(timer);
+  }, [messages, currentFolderId, currentChatId, folders, chatHistory, suggestionData]);
 
   // Settings & Feedback Modals
   const [isSettingsModalOpen, setIsSettingsModalOpen] = useState(false);
@@ -629,6 +839,8 @@ function App() {
     }
     setCurrentFolderId(null);
     setTargetFolderId(null);
+    // Reset Gemini session to avoid mixing histories
+    import('../services/gemini').then(m => m.resetChatSession());
   }, []);
 
   const handleOpenProject = (folderId: string) => {
@@ -648,6 +860,8 @@ function App() {
     if (typeof chrome !== 'undefined' && chrome.storage) {
       chrome.storage.local.set({ lia_current_chat_id: chat.id });
     }
+    // Reset Gemini session so next message uses loaded chat history
+    import('../services/gemini').then(m => m.resetChatSession());
   }, []);
 
   // Delete a chat
@@ -750,7 +964,7 @@ function App() {
   // ========== END SUPABASE ==========
 
   // Context from selected text (shown as attachment, not auto-sent)
-  const [selectedContext, setSelectedContext] = useState<{ text: string; action: string } | null>(null);
+  const [selectedContext, setSelectedContext] = useState<{ text: string; action: string; url?: string; pageTitle?: string } | null>(null);
   
   // Function to check for pending selection
   const checkPendingSelection = async () => {
@@ -759,10 +973,20 @@ function App() {
       console.log('Checking pending selection:', response);
       if (response && response.text) {
         console.log('Found pending context:', response.text.substring(0, 50));
+        // Get URL of the active tab for reference navigation
+        let sourceUrl = '';
+        let sourceTitle = '';
+        try {
+          const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
+          sourceUrl = tab?.url || '';
+          sourceTitle = tab?.title || '';
+        } catch { /* ignore */ }
         // Set as context, don't auto-send
         setSelectedContext({
           text: response.text,
-          action: response.action
+          action: response.action,
+          url: sourceUrl,
+          pageTitle: sourceTitle
         });
       }
     } catch (err) {
@@ -799,6 +1023,19 @@ function App() {
   // Clear context helper
   const clearSelectedContext = () => {
     setSelectedContext(null);
+  };
+
+  // Navigate to source and highlight text (Smart References)
+  const navigateToSource = (source: { uri: string; title?: string; snippet?: string }) => {
+    if (source.snippet) {
+      chrome.runtime.sendMessage({
+        type: 'NAVIGATE_AND_HIGHLIGHT',
+        url: source.uri,
+        searchText: source.snippet
+      });
+    } else {
+      chrome.tabs.create({ url: source.uri });
+    }
   };
 
   // Voice Recording
@@ -863,11 +1100,15 @@ function App() {
           ]);
           
           const transcribedText = result.response.text().trim();
-          
+
           if (transcribedText) {
-            // Put transcribed text in input field for user to review
-            setInputValue(transcribedText);
             console.log('Audio transcribed:', transcribedText);
+
+            // Clear input field and send message automatically
+            setInputValue('');
+
+            // Send the transcribed message
+            await handleSendMessage(transcribedText);
           } else {
             console.warn('No transcription returned');
             setMessages(prev => [...prev, {
@@ -1110,6 +1351,124 @@ function App() {
     pre: (props: any) => <>{props.children}</> // Remove default pre wrapper
   };
 
+  // Execute function calls from Live API (Computer Use)
+  const executeLiveFunctionCall = async (functionCall: { name: string; args: any }): Promise<string> => {
+    try {
+      console.log("Executing Live API function call:", functionCall);
+
+      // Get current active tab
+      const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
+      if (!tab?.id) {
+        return JSON.stringify({ error: "No active tab found" });
+      }
+
+      const tabId = tab.id;
+
+      // Handle different function calls
+      switch (functionCall.name) {
+        case 'click_element':
+        case 'type_text':
+        case 'press_key':
+        case 'scroll_page':
+        case 'select_option':
+        case 'hover_element': {
+          // Execute action via content script
+          const response = await chrome.tabs.sendMessage(tabId, {
+            type: 'EXECUTE_ACTION',
+            action: functionCall.name.replace('_element', '').replace('_', ''),
+            args: functionCall.args
+          });
+          return JSON.stringify(response);
+        }
+
+        case 'navigate': {
+          await chrome.tabs.update(tabId, { url: functionCall.args.url });
+          await new Promise(resolve => setTimeout(resolve, 2000)); // Wait for navigation
+          return JSON.stringify({ result: `Navegado a ${functionCall.args.url}` });
+        }
+
+        case 'go_back': {
+          await chrome.tabs.goBack(tabId);
+          await new Promise(resolve => setTimeout(resolve, 1500));
+          return JSON.stringify({ result: "Navegación hacia atrás exitosa" });
+        }
+
+        case 'wait_and_observe': {
+          const waitMs = functionCall.args.wait_ms || 1500;
+          await new Promise(resolve => setTimeout(resolve, Math.min(waitMs, 5000)));
+
+          // Get updated page context after waiting
+          if (liveClientRef.current && isLiveComputerUseEnabled) {
+            await sendPageContextToLive();
+          }
+
+          return JSON.stringify({ result: `Esperado ${waitMs}ms, página actualizada` });
+        }
+
+        case 'task_complete': {
+          return JSON.stringify({
+            result: "Tarea completada",
+            summary: functionCall.args.summary
+          });
+        }
+
+        case 'task_failed': {
+          return JSON.stringify({
+            result: "Tarea fallida",
+            reason: functionCall.args.reason
+          });
+        }
+
+        default:
+          return JSON.stringify({ error: `Función desconocida: ${functionCall.name}` });
+      }
+    } catch (error: any) {
+      console.error("Error executing Live API function call:", error);
+      return JSON.stringify({ error: error.message || "Error ejecutando función" });
+    }
+  };
+
+  // Get page context and send to Live API
+  const sendPageContextToLive = async () => {
+    try {
+      const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
+      if (!tab?.id) {
+        console.warn("No active tab for page context");
+        return;
+      }
+
+      const tabId = tab.id;
+
+      // Get accessibility tree
+      const treeResponse = await chrome.tabs.sendMessage(tabId, {
+        type: 'GET_ACCESSIBILITY_TREE'
+      });
+
+      // Get screenshot
+      const screenshotResponse = await chrome.runtime.sendMessage({
+        type: 'CAPTURE_SCREENSHOT',
+        tabId: tabId
+      });
+
+      if (treeResponse?.tree && screenshotResponse?.screenshot) {
+        const pageContext = {
+          accessibilityTree: treeResponse.tree,
+          screenshot: screenshotResponse.screenshot.split(',')[1], // Remove data:image/jpeg;base64,
+          url: tab.url || '',
+          title: tab.title || ''
+        };
+
+        // Send context to Live API
+        if (liveClientRef.current) {
+          liveClientRef.current.updatePageContext(pageContext);
+          liveClientRef.current.sendPageContext();
+        }
+      }
+    } catch (error) {
+      console.error("Error getting page context for Live API:", error);
+    }
+  };
+
   const handleLiveToggle = async () => {
     // Prevent double-clicks while connecting
     if (isLiveConnecting) {
@@ -1147,8 +1506,6 @@ function App() {
         onTextResponse: (text: string) => {
           // Handle text responses (if any)
           console.log("Live API: Text response:", text);
-          // Handle text responses (if any)
-          console.log("Live API: Text response:", text);
           setMessages(prev => [...prev, {
             id: crypto.randomUUID(),
             role: 'model',
@@ -1176,10 +1533,17 @@ function App() {
           setIsLiveActive(false);
           setIsLiveMicActive(false);
         },
-        onReady: () => {
+        onReady: async () => {
           console.log("Live API: Ready for audio");
-        }
-      });
+
+          // If Computer Use is enabled, send page context immediately
+          if (isLiveComputerUseEnabled) {
+            console.log("Live API: Computer Use enabled, sending page context...");
+            await sendPageContextToLive();
+          }
+        },
+        onFunctionCall: isLiveComputerUseEnabled ? executeLiveFunctionCall : undefined
+      }, isLiveComputerUseEnabled);
 
       console.log("Connecting to Live API...");
       await liveClientRef.current.connect();
@@ -1258,6 +1622,12 @@ function App() {
     } else {
       // Start microphone capture
       try {
+        // If Computer Use is enabled, send updated page context before starting mic
+        if (isLiveComputerUseEnabled) {
+          console.log("Live API: Updating page context before starting mic...");
+          await sendPageContextToLive();
+        }
+
         audioCapturRef.current = new AudioCapture();
         await audioCapturRef.current.start((base64Audio: string) => {
           // Send audio chunks to Live API
@@ -1269,7 +1639,7 @@ function App() {
         console.log("Live microphone started");
       } catch (e: any) {
         console.error("Failed to start microphone:", e);
-        
+
         // Open permissions page
         chrome.tabs.create({ url: chrome.runtime.getURL('permissions.html') });
 
@@ -1290,11 +1660,12 @@ function App() {
     const imagesToUse = overrideImages || selectedImages;
     let displayMessage = text.trim(); // What user sees in chat
     let apiMessage = text.trim(); // What gets sent to API
-    
+    let contextDataForMessage: Message['contextData'] = null;
+
     if (selectedContext) {
       // Context goes to API but NOT displayed in chat
       const contextForAPI = `[CONTEXTO - Texto seleccionado de la página que el usuario quiere que analices]:\n"${selectedContext.text}"\n\n[INSTRUCCIÓN DEL USUARIO]:`;
-      
+
       if (displayMessage) {
         // User typed something - that's what we show
         apiMessage = contextForAPI + '\n' + displayMessage;
@@ -1318,6 +1689,13 @@ function App() {
         }
         apiMessage = contextForAPI + '\n' + displayMessage;
       }
+      // Save reference data for "go to source" navigation
+      contextDataForMessage = {
+        text: selectedContext.text,
+        action: selectedContext.action,
+        url: selectedContext.url,
+        pageTitle: selectedContext.pageTitle
+      };
       // Clear context after using it
       setSelectedContext(null);
     }
@@ -1360,7 +1738,8 @@ function App() {
         role: 'user',
         text: displayMessage,
         timestamp: Date.now(),
-        images: selectedImages.length > 0 ? [...selectedImages] : undefined
+        images: selectedImages.length > 0 ? [...selectedImages] : undefined,
+        contextData: contextDataForMessage
       };
       setMessages(prev => [...prev, userMessage]);
       setInputValue('');
@@ -1384,7 +1763,8 @@ function App() {
         role: 'user',
         text: displayMessage,
         timestamp: Date.now(),
-        images: imagesToUse.length > 0 ? [...imagesToUse] : undefined
+        images: imagesToUse.length > 0 ? [...imagesToUse] : undefined,
+        contextData: contextDataForMessage
         };
 
         setMessages((prev) => [...prev, userMessage]);
@@ -1670,6 +2050,18 @@ function App() {
       const currentModelConfig = MODEL_OPTIONS.find(m => m.id === preferredPrimaryModel);
       const thinkingType = currentModelConfig?.thinkingType || 'level';
 
+      // Build conversation history for Gemini context persistence
+      const conversationHistory = messages
+        .filter(m =>
+          m.id !== 'live-connecting' &&
+          !m.id.startsWith('error-') &&
+          m.text && m.text.trim().length > 0
+        )
+        .map(m => ({
+          role: m.role as 'user' | 'model',
+          text: m.text
+        }));
+
       const result = await import('../services/gemini').then(m => m.sendMessageStream(
         apiMessage,
         pageContext,
@@ -1678,7 +2070,8 @@ function App() {
         undefined, // projectContext
         { mode: thinkingMode as 'off' | 'minimal' | 'low' | 'medium' | 'high', type: thinkingType },
         imagesToUse.length > 0 ? imagesToUse : undefined, // images
-        activeTool?.system_prompt // toolPrompt
+        activeTool?.system_prompt, // toolPrompt
+        conversationHistory // conversation history for context persistence
       ));
 
       let fullText = '';
@@ -1719,16 +2112,29 @@ function App() {
         );
       }
       
-      // Get grounding metadata (sources)
+      // Get grounding metadata (sources + snippets for smart references)
       const groundingMeta = await result.getGroundingMetadata();
       if (groundingMeta?.groundingChunks) {
         const sources: GroundingSource[] = groundingMeta.groundingChunks
           .filter((chunk: any) => chunk.web)
-          .map((chunk: any) => ({
-            uri: chunk.web.uri,
-            title: chunk.web.title
-          }));
-        
+          .map((chunk: any, i: number) => {
+            // Find snippet from groundingSupports that references this chunk
+            let snippet = '';
+            if (groundingMeta.groundingSupports) {
+              const support = (groundingMeta.groundingSupports as any[]).find(
+                (s: any) => s.groundingChunkIndices?.includes(i)
+              );
+              if (support?.segment?.text) {
+                snippet = support.segment.text;
+              }
+            }
+            return {
+              uri: chunk.web.uri,
+              title: chunk.web.title,
+              snippet
+            };
+          });
+
         if (sources.length > 0) {
           setMessages((prev) =>
             prev.map(msg =>
@@ -2020,10 +2426,11 @@ function App() {
               alignItems: 'center',
               justifyContent: 'center'
             }}
-            title="Biblioteca de Herramientas"
+            title="Biblioteca de Prompts"
           >
             <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
-              <path d="M14.7 6.3a1 1 0 0 0 0 1.4l1.6 1.6a1 1 0 0 0 1.4 0l3.77-3.77a6 6 0 0 1-7.94 7.94l-6.91 6.91a2.12 2.12 0 0 1-3-3l6.91-6.91a6 6 0 0 1 7.94-7.94l-3.76 3.76z"/>
+              <path d="M4 19.5A2.5 2.5 0 0 1 6.5 17H20"></path>
+              <path d="M6.5 2H20v20H6.5A2.5 2.5 0 0 1 4 19.5v-15A2.5 2.5 0 0 1 6.5 2z"></path>
             </svg>
           </button>
 
@@ -2185,6 +2592,7 @@ function App() {
         <ProjectHub
           folder={folders.find(f => f.id === currentFolderId)!}
           chats={chatHistory.filter(c => c.folderId === currentFolderId)}
+          onRenameProject={handleRenameProject}
           onNewChat={() => {
               // Fallback or secondary action if needed, currently main action is input
           }}
@@ -2224,6 +2632,7 @@ function App() {
                  return; // Live API usually takes over full screen or panel
              }
           }}
+          onOpenToolLibrary={() => setIsToolLibraryOpen(true)}
         />
       )}
 
@@ -2385,6 +2794,44 @@ function App() {
                 )}
               </div>
 
+              {/* Go to reference button for user messages with saved context */}
+              {msg.role === 'user' && msg.contextData?.url && (
+                <div
+                  onClick={() => navigateToSource({
+                    uri: msg.contextData!.url!,
+                    title: msg.contextData!.pageTitle || '',
+                    snippet: msg.contextData!.text
+                  })}
+                  style={{
+                    display: 'flex',
+                    alignItems: 'center',
+                    gap: '6px',
+                    padding: '6px 12px',
+                    borderRadius: '8px',
+                    background: 'rgba(0, 212, 179, 0.1)',
+                    border: '1px solid rgba(0, 212, 179, 0.3)',
+                    cursor: 'pointer',
+                    transition: 'all 0.2s',
+                    alignSelf: 'flex-end'
+                  }}
+                  onMouseOver={(e) => {
+                    e.currentTarget.style.background = 'rgba(0, 212, 179, 0.2)';
+                  }}
+                  onMouseOut={(e) => {
+                    e.currentTarget.style.background = 'rgba(0, 212, 179, 0.1)';
+                  }}
+                  title={`Ir a: ${msg.contextData.pageTitle || msg.contextData.url}`}
+                >
+                  <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="var(--color-accent)" strokeWidth="2">
+                    <circle cx="11" cy="11" r="8"></circle>
+                    <line x1="21" y1="21" x2="16.65" y2="16.65"></line>
+                  </svg>
+                  <span style={{ fontSize: '11px', color: 'var(--color-accent)', fontWeight: 500 }}>
+                    Ir a referencia
+                  </span>
+                </div>
+              )}
+
               {/* Sources - Elegant Design */}
               {msg.role === 'model' && msg.sources && msg.sources.length > 0 && (
                 <div style={{
@@ -2438,27 +2885,24 @@ function App() {
                   {/* Sources List */}
                   <div style={{ padding: '8px' }}>
                     {msg.sources.slice(0, 6).map((source, i) => {
-                       // ... existing detailed source mapping ...
                        let domain = '';
                        try {
                          domain = new URL(source.uri).hostname.replace('www.', '');
                        } catch {
                          domain = source.uri;
                        }
- 
+
                        return (
-                         <a
+                         <div
                            key={i}
-                           href={source.uri}
-                           target="_blank"
-                           rel="noopener noreferrer"
+                           onClick={() => navigateToSource(source)}
                            style={{
                              display: 'flex',
                              alignItems: 'center',
                              gap: '10px',
                              padding: '10px 12px',
                              borderRadius: '8px',
-                             textDecoration: 'none',
+                             cursor: 'pointer',
                              transition: 'background 0.2s',
                              marginBottom: i < Math.min(msg.sources!.length, 6) - 1 ? '4px' : '0'
                            }}
@@ -2524,6 +2968,15 @@ function App() {
                                  {i + 1}
                                </span>
                                {domain}
+                               {source.snippet && (
+                                 <span style={{
+                                   marginLeft: '4px',
+                                   color: 'var(--color-accent)',
+                                   fontSize: '10px'
+                                 }} title="Click para ir al texto exacto">
+                                   — ir al texto
+                                 </span>
+                               )}
                              </div>
                            </div>
                            <svg
@@ -2531,14 +2984,23 @@ function App() {
                              height="16"
                              viewBox="0 0 24 24"
                              fill="none"
-                             stroke="var(--color-gray-medium)"
+                             stroke={source.snippet ? 'var(--color-accent)' : 'var(--color-gray-medium)'}
                              strokeWidth="2"
-                             style={{ flexShrink: 0, opacity: 0.5 }}
+                             style={{ flexShrink: 0, opacity: source.snippet ? 0.8 : 0.5 }}
                            >
-                             <line x1="7" y1="17" x2="17" y2="7"></line>
-                             <polyline points="7 7 17 7 17 17"></polyline>
+                             {source.snippet ? (
+                               <>
+                                 <circle cx="11" cy="11" r="8"></circle>
+                                 <line x1="21" y1="21" x2="16.65" y2="16.65"></line>
+                               </>
+                             ) : (
+                               <>
+                                 <line x1="7" y1="17" x2="17" y2="7"></line>
+                                 <polyline points="7 7 17 7 17 17"></polyline>
+                               </>
+                             )}
                            </svg>
-                         </a>
+                         </div>
                        );
                     })}
                      {msg.sources.length > 6 && (
@@ -3106,7 +3568,49 @@ function App() {
                     }}></div>
                   )}
                 </button>
-                
+
+                {/* Computer Use for Live API */}
+                <button
+                  onClick={() => {
+                    setIsLiveComputerUseEnabled(!isLiveComputerUseEnabled);
+                    setIsPlusMenuOpen(false);
+                  }}
+                  disabled={isLiveActive}
+                  style={{
+                    width: '100%',
+                    display: 'flex',
+                    alignItems: 'center',
+                    gap: '10px',
+                    padding: '10px 12px',
+                    background: isLiveComputerUseEnabled ? 'rgba(16, 185, 129, 0.15)' : 'transparent',
+                    border: 'none',
+                    borderRadius: '8px',
+                    color: isLiveComputerUseEnabled ? '#10b981' : 'var(--color-white)',
+                    cursor: isLiveActive ? 'not-allowed' : 'pointer',
+                    fontSize: '13px',
+                    textAlign: 'left',
+                    opacity: isLiveActive ? 0.5 : 1
+                  }}
+                  title={isLiveActive ? 'Desconecta Live API para cambiar' : ''}
+                >
+                  <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+                    <rect x="2" y="3" width="20" height="14" rx="2" ry="2"></rect>
+                    <line x1="8" y1="21" x2="16" y2="21"></line>
+                    <line x1="12" y1="17" x2="12" y2="21"></line>
+                  </svg>
+                  <div>
+                    <div style={{ fontWeight: 500 }}>Control de Página</div>
+                    <div style={{ fontSize: '11px', color: 'var(--color-gray-medium)' }}>
+                      {isLiveComputerUseEnabled ? 'Activado para Live API' : 'Habilita interacción'}
+                    </div>
+                  </div>
+                  {isLiveComputerUseEnabled && (
+                    <svg width="16" height="16" viewBox="0 0 24 24" fill="#10b981" style={{ marginLeft: 'auto' }}>
+                      <polyline points="20 6 9 17 4 12" stroke="#10b981" strokeWidth="2" fill="none"></polyline>
+                    </svg>
+                  )}
+                </button>
+
                 {/* Image Generation */}
                 <button
                   onClick={() => {
@@ -3233,6 +3737,59 @@ function App() {
                 </button>
 
                 <div style={{ height: '1px', background: 'var(--border-modal)', margin: '8px 0' }}></div>
+
+                {/* Save as Prompt */}
+                <button
+                  onClick={() => {
+                    const textToSave = inputValue.trim();
+                    if (textToSave) {
+                      setPendingPromptText(textToSave);
+                      setEditingTool(null);
+                      setIsToolEditorOpen(true);
+                    } else {
+                      // Open library to create from scratch
+                      setIsToolLibraryOpen(true);
+                    }
+                    setIsPlusMenuOpen(false);
+                  }}
+                  style={{
+                    width: '100%',
+                    display: 'flex',
+                    alignItems: 'center',
+                    gap: '10px',
+                    padding: '10px 12px',
+                    background: inputValue.trim() ? 'rgba(168, 85, 247, 0.1)' : 'transparent',
+                    border: 'none',
+                    borderRadius: '8px',
+                    color: inputValue.trim() ? '#a855f7' : 'var(--color-white)',
+                    cursor: 'pointer',
+                    fontSize: '13px',
+                    textAlign: 'left'
+                  }}
+                >
+                  <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+                    <path d="M19 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11l5 5v11a2 2 0 0 1-2 2z"></path>
+                    <polyline points="17 21 17 13 7 13 7 21"></polyline>
+                    <polyline points="7 3 7 8 15 8"></polyline>
+                  </svg>
+                  <div>
+                    <div style={{ fontWeight: 500 }}>
+                      {inputValue.trim() ? 'Guardar como Prompt' : 'Crear Prompt'}
+                    </div>
+                    <div style={{ fontSize: '11px', color: 'var(--color-gray-medium)' }}>
+                      {inputValue.trim() 
+                        ? `Guardar: "${inputValue.slice(0, 20)}${inputValue.length > 20 ? '...' : ''}"` 
+                        : 'Guarda para reusar'}
+                    </div>
+                  </div>
+                  {inputValue.trim() && (
+                    <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="#a855f7" strokeWidth="2" style={{ marginLeft: 'auto' }}>
+                      <circle cx="12" cy="12" r="10"></circle>
+                      <line x1="12" y1="8" x2="12" y2="16"></line>
+                      <line x1="8" y1="12" x2="16" y2="12"></line>
+                    </svg>
+                  )}
+                </button>
 
                 {/* Attach File */}
                 <button
@@ -4319,13 +4876,20 @@ function App() {
       <ToolEditorModal
         isOpen={isToolEditorOpen}
         tool={editingTool}
+        initialPromptText={pendingPromptText}
         onClose={() => {
           setIsToolEditorOpen(false);
           setEditingTool(null);
+          setPendingPromptText('');
         }}
         onSave={() => {
           setIsToolEditorOpen(false);
           setEditingTool(null);
+          setPendingPromptText('');
+          // Clear the input since the prompt was saved
+          if (pendingPromptText) {
+            setInputValue('');
+          }
           // Refresh tool library by closing and reopening if open
           if (isToolLibraryOpen) {
             setIsToolLibraryOpen(false);
@@ -4333,6 +4897,19 @@ function App() {
           }
         }}
       />
+
+      {/* Project Suggestion Modal - Proactive Organization */}
+      {suggestionData && (
+        <ProjectSuggestionModal
+          isOpen={suggestionData.isOpen}
+          onClose={() => setSuggestionData(null)}
+          onConfirm={handleSuggestionConfirm}
+          suggestionType={suggestionData.type}
+          targetName={suggestionData.targetName}
+          reason={suggestionData.reason}
+          relatedChatsCount={suggestionData.relatedChatsCount}
+        />
+      )}
     </div>
   );
 }

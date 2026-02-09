@@ -81,6 +81,11 @@ async function getProModel() {
 
 let chatSession: any = null;
 
+/** Reset the chat session (call when creating a new chat or switching conversations) */
+export function resetChatSession() {
+  chatSession = null;
+}
+
 // Deep Research Function - Uses official @google/genai SDK for Interactions API
 // Documentation: https://ai.google.dev/gemini-api/docs/deep-research
 // Deep Research analyzes up to 100+ sources and takes 2-15 minutes to complete
@@ -352,6 +357,12 @@ export interface ThinkingConfig {
   type: 'level' | 'budget'; // Gemini 3 uses 'level', Gemini 2.5 uses 'budget'
 }
 
+// Conversation history message format (from App.tsx)
+export interface ConversationMessage {
+  role: 'user' | 'model';
+  text: string;
+}
+
 // Budget values for Gemini 2.5 (0 = off for Flash, 128-24576 range)
 const THINKING_BUDGETS: Record<string, number> = {
   off: 0,
@@ -522,7 +533,8 @@ export async function sendMessageStream(
   projectContext?: string,
   thinkingConfig?: ThinkingConfig,
   images?: string[],
-  toolPrompt?: string // Tool Library: inject custom tool system prompt
+  toolPrompt?: string, // Tool Library: inject custom tool system prompt
+  conversationHistory?: ConversationMessage[] // Conversation history for context persistence
 ) {
   // Determine IDs
   const primaryId = modelOverrides?.primary || MODELS.PRIMARY;
@@ -628,10 +640,50 @@ export async function sendMessageStream(
   console.log('Personalization:', !!personalization);
   console.log('Thinking Config:', thinkingConfig);
 
-  // Handle Session Logic - ALWAYS refresh session to apply system prompt updates or model changes
+  // Handle Session Logic - Build history from conversation or existing session
   let currentHistory: any[] = [];
-  if (chatSession) {
+
+  // PRIORITY 1: Use conversation history passed from App.tsx (loaded from Supabase + current messages)
+  if (conversationHistory && conversationHistory.length > 0) {
+    const MAX_HISTORY_MESSAGES = 50;
+    const trimmed = conversationHistory.slice(-MAX_HISTORY_MESSAGES);
+
+    // Convert to Gemini Content format: { role, parts: [{ text }] }
+    const raw = trimmed
+      .filter(msg => msg.text && msg.text.trim().length > 0)
+      .map(msg => ({
+        role: msg.role,
+        parts: [{ text: msg.text }]
+      }));
+
+    // Gemini requires: start with 'user', alternate roles, don't end with 'user'
+    // Remove leading 'model' messages
+    while (raw.length > 0 && raw[0].role === 'model') {
+      raw.shift();
+    }
+
+    // Merge consecutive same-role messages (Gemini requires alternation)
+    const clean: any[] = [];
+    for (const entry of raw) {
+      if (clean.length === 0 || clean[clean.length - 1].role !== entry.role) {
+        clean.push(entry);
+      } else {
+        clean[clean.length - 1].parts[0].text += '\n' + entry.parts[0].text;
+      }
+    }
+
+    // Remove trailing 'user' message (it will be sent as the current turn)
+    if (clean.length > 0 && clean[clean.length - 1].role === 'user') {
+      clean.pop();
+    }
+
+    currentHistory = clean;
+    console.log(`Loaded ${currentHistory.length} history entries from conversation`);
+  }
+  // PRIORITY 2: Fall back to existing chatSession history (in-memory, same session)
+  else if (chatSession) {
     try { currentHistory = await chatSession.getHistory(); } catch {}
+    console.log(`Loaded ${currentHistory.length} history entries from existing session`);
   }
 
   // Start fresh session with history to ensure new System Prompt applies

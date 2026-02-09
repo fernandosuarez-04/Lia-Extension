@@ -1,4 +1,4 @@
-import React, { useState, useRef } from 'react';
+import React, { useState, useRef, useEffect } from 'react';
 
 interface ProjectHubProps {
   folder: { 
@@ -16,7 +16,11 @@ interface ProjectHubProps {
   isRecording: boolean;
   onToggleRecording: () => void;
   onToolSelect: (tool: 'deep_research' | 'image_gen' | 'prompt_optimizer' | 'live_api' | 'web_agent') => void;
+  onOpenToolLibrary?: () => void;
+  onRenameProject?: (newName: string) => Promise<void>;
 }
+
+import { ProjectContextModal } from './ProjectContextModal';
 
 export const ProjectHub: React.FC<ProjectHubProps> = ({ 
   folder, 
@@ -27,12 +31,52 @@ export const ProjectHub: React.FC<ProjectHubProps> = ({
   onStartChatWithContext,
   isRecording,
   onToggleRecording,
-  onToolSelect
+  onToolSelect,
+  onOpenToolLibrary,
+  onRenameProject
 }) => {
   const [inputValue, setInputValue] = useState('');
   const [isDragging, setIsDragging] = useState(false);
   const [isToolsOpen, setIsToolsOpen] = useState(false);
+  const [isContextModalOpen, setIsContextModalOpen] = useState(false);
   const fileInputRef = useRef<HTMLInputElement>(null);
+
+  // Title editing state
+  const [isEditingTitle, setIsEditingTitle] = useState(false);
+  const [editedTitle, setEditedTitle] = useState(folder.name);
+  const [isSavingTitle, setIsSavingTitle] = useState(false);
+
+  useEffect(() => {
+    setEditedTitle(folder.name);
+  }, [folder.name]);
+
+  const handleTitleSave = async () => {
+    if (!onRenameProject || !editedTitle.trim() || editedTitle === folder.name) {
+      setIsEditingTitle(false);
+      setEditedTitle(folder.name);
+      return;
+    }
+
+    try {
+      setIsSavingTitle(true);
+      await onRenameProject(editedTitle.trim());
+      setIsEditingTitle(false);
+    } catch (error) {
+      console.error('Error renaming project:', error);
+      setEditedTitle(folder.name);
+    } finally {
+      setIsSavingTitle(false);
+    }
+  };
+
+  const handleTitleKeyDown = (e: React.KeyboardEvent) => {
+    if (e.key === 'Enter') {
+      handleTitleSave();
+    } else if (e.key === 'Escape') {
+      setIsEditingTitle(false);
+      setEditedTitle(folder.name);
+    }
+  };
 
   const handleKeyDown = (e: React.KeyboardEvent) => {
     if (e.key === 'Enter' && !e.shiftKey) {
@@ -76,7 +120,7 @@ export const ProjectHub: React.FC<ProjectHubProps> = ({
       onDragLeave={handleDragLeave}
       onDrop={handleDrop}
     >
-      {/* Background Ambience - Simplified/Removed for cleaner theme switching, or used with opacity */}
+      {/* Background Ambience */}
       <div style={{
           position: 'absolute',
           top: 0,
@@ -88,38 +132,149 @@ export const ProjectHub: React.FC<ProjectHubProps> = ({
           pointerEvents: 'none'
       }} />
 
-      <div style={{ padding: '40px', zIndex: 1, maxWidth: '1000px', margin: '0 auto', width: '100%', boxSizing: 'border-box' }}>
-        
-        {/* Header Section */}
-        <div style={{ marginBottom: '50px', display: 'flex', alignItems: 'center', gap: '20px' }}>
-          <div style={{
-            width: '64px',
-            height: '64px',
-            borderRadius: '20px',
-            background: 'var(--bg-dark-secondary)',
+      {/* Header */}
+      <div style={{
+        padding: '24px 24px 16px 24px',
+        borderBottom: '1px solid var(--bg-dark-secondary)',
+        display: 'flex', 
+        justifyContent: 'space-between',
+        alignItems: 'flex-start',
+        zIndex: 1
+      }}>
+        <div>
+          <div style={{ 
+            fontSize: '11px', 
+            textTransform: 'uppercase', 
+            letterSpacing: '1px', 
+            color: 'var(--color-gray-medium)',
+            marginBottom: '8px',
             display: 'flex',
             alignItems: 'center',
-            justifyContent: 'center',
-            border: '1px solid var(--border-modal)',
-            boxShadow: 'var(--shadow-modal)',
-            backdropFilter: 'blur(4px)'
+            gap: '6px'
           }}>
-             <svg width="32" height="32" viewBox="0 0 24 24" fill="none" stroke="var(--color-accent)" strokeWidth="1.5">
-                <path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z"></path>
-             </svg>
+            <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z"></path></svg>
+            ESPACIO DE TRABAJO
           </div>
-          <div>
-            <div style={{ fontSize: '12px', textTransform: 'uppercase', letterSpacing: '2px', color: 'var(--color-accent)', fontWeight: 600, marginBottom: '4px' }}>
-              Workspace
-            </div>
-            <h1 style={{ fontSize: '32px', fontWeight: 700, margin: 0, color: 'var(--color-white)', letterSpacing: '-0.5px' }}>
-              {folder.name}
-            </h1>
-            <div style={{ fontSize: '14px', color: 'var(--color-gray-medium)', marginTop: '4px' }}>
-              {folder.description || 'Espacio de trabajo dedicado'}
-            </div>
+          
+          <div style={{ display: 'flex', alignItems: 'center', gap: '10px' }}>
+            {isEditingTitle ? (
+              <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+                <input
+                  value={editedTitle}
+                  onChange={(e) => setEditedTitle(e.target.value)}
+                  onKeyDown={handleTitleKeyDown}
+                  autoFocus
+                  onBlur={handleTitleSave}
+                  disabled={isSavingTitle}
+                  style={{
+                    background: 'var(--bg-dark-tertiary)',
+                    border: '1px solid var(--color-accent)',
+                    borderRadius: '6px',
+                    padding: '4px 8px',
+                    fontSize: '24px',
+                    fontWeight: 700,
+                    color: 'var(--color-white)',
+                    width: '300px',
+                    outline: 'none',
+                    fontFamily: 'inherit'
+                  }}
+                />
+                {isSavingTitle && (
+                  <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" className="animate-spin">
+                    <path d="M12 2v4"></path><path d="M12 18v4"></path><path d="M4.93 4.93l2.83 2.83"></path><path d="M16.24 16.24l2.83 2.83"></path><path d="M2 12h4"></path><path d="M18 12h4"></path><path d="M4.93 19.07l2.83-2.83"></path><path d="M16.24 7.76l2.83-2.83"></path>
+                  </svg>
+                )}
+              </div>
+            ) : (
+              <div 
+                style={{ display: 'flex', alignItems: 'center', gap: '10px', group: 'title-group' } as any}
+                className="group"
+              >
+                <h1 
+                  style={{ 
+                    margin: 0, 
+                    fontSize: '24px', 
+                    fontWeight: 700,
+                    color: 'var(--color-white)',
+                    lineHeight: '1.2'
+                  }}
+                  onClick={() => onRenameProject && setIsEditingTitle(true)}
+                >
+                  {folder.name}
+                </h1>
+                {onRenameProject && (
+                  <button
+                    onClick={() => setIsEditingTitle(true)}
+                    style={{
+                      background: 'none',
+                      border: 'none',
+                      color: 'var(--color-gray-medium)',
+                      cursor: 'pointer',
+                      padding: '4px',
+                      opacity: 0, 
+                      transition: 'opacity 0.2s'
+                    }}
+                    className="edit-btn"
+                  >
+                     <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+                      <path d="M11 4H4a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7"></path>
+                      <path d="M18.5 2.5a2.121 2.121 0 0 1 3 3L12 15l-4 1 1-4 9.5-9.5z"></path>
+                    </svg>
+                  </button>
+                )}
+                <style>{`
+                  .group:hover .edit-btn { opacity: 1 !important; }
+                `}</style>
+              </div>
+            )}
+          </div>
+          
+          <div style={{ 
+            fontSize: '13px', 
+            color: 'var(--color-gray-medium)', 
+            marginTop: '8px',
+            maxWidth: '600px',
+            lineHeight: '1.5'
+          }}>
+            {folder.description || "Espacio dedicado para este proyecto."}
           </div>
         </div>
+
+        <button
+          onClick={() => setIsContextModalOpen(true)}
+          style={{
+            display: 'flex',
+            alignItems: 'center',
+            gap: '8px',
+            padding: '8px 12px',
+            background: 'rgba(255, 255, 255, 0.05)',
+            border: '1px solid rgba(255, 255, 255, 0.1)',
+            borderRadius: '8px',
+            color: 'var(--color-white)',
+            fontSize: '13px',
+            cursor: 'pointer',
+            transition: 'all 0.2s',
+            fontWeight: 500
+          }}
+          onMouseOver={(e) => e.currentTarget.style.background = 'rgba(255, 255, 255, 0.1)'}
+          onMouseOut={(e) => e.currentTarget.style.background = 'rgba(255, 255, 255, 0.05)'}
+        >
+          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+            <circle cx="12" cy="12" r="10"></circle>
+            <line x1="12" y1="16" x2="12" y2="12"></line>
+            <line x1="12" y1="8" x2="12.01" y2="8"></line>
+          </svg>
+          Ver Detalles
+        </button>
+      </div>
+
+        {/* Project Context Modal */}
+        <ProjectContextModal
+          isOpen={isContextModalOpen}
+          onClose={() => setIsContextModalOpen(false)}
+          folder={folder}
+          chats={chats}
+        />
 
         {/* Input Hero Section */}
         <div style={{ marginBottom: '60px', position: 'relative' }}>
@@ -298,6 +453,41 @@ export const ProjectHub: React.FC<ProjectHubProps> = ({
                                       </div>
                                     </button>
 
+                                    {/* Prompt Library */}
+                                    {onOpenToolLibrary && (
+                                      <button
+                                        onClick={() => {
+                                          onOpenToolLibrary();
+                                          setIsToolsOpen(false);
+                                        }}
+                                        style={{
+                                          width: '100%',
+                                          display: 'flex',
+                                          alignItems: 'center',
+                                          gap: '10px',
+                                          padding: '10px 12px',
+                                          background: 'transparent',
+                                          border: 'none',
+                                          borderRadius: '8px',
+                                          color: 'var(--color-white)',
+                                          cursor: 'pointer',
+                                          fontSize: '13px',
+                                          textAlign: 'left'
+                                        }}
+                                        onMouseOver={(e) => e.currentTarget.style.background = 'var(--bg-dark-secondary)'}
+                                        onMouseOut={(e) => e.currentTarget.style.background = 'transparent'}
+                                      >
+                                        <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+                                          <path d="M4 19.5A2.5 2.5 0 0 1 6.5 17H20"></path>
+                                          <path d="M6.5 2H20v20H6.5A2.5 2.5 0 0 1 4 19.5v-15A2.5 2.5 0 0 1 6.5 2z"></path>
+                                        </svg>
+                                        <div>
+                                          <div style={{ fontWeight: 500 }}>Biblioteca de Prompts</div>
+                                          <div style={{ fontSize: '11px', color: 'var(--color-gray-medium)' }}>Usar prompts guardados</div>
+                                        </div>
+                                      </button>
+                                    )}
+
                                     <div style={{ height: '1px', background: 'var(--border-modal)', margin: '8px 0' }}></div>
                                     
                                     {/* Attach File inside Dropdown (to match App.tsx) */}
@@ -462,7 +652,7 @@ export const ProjectHub: React.FC<ProjectHubProps> = ({
                                     {chat.title}
                                 </div>
                                 <div style={{ fontSize: '13px', color: 'var(--color-gray-medium)' }}>
-                                    Editado {new Date(chat.updatedAt).toLocaleDateString()}
+                                    Editado {new Date(chat.updatedAt || chat.createdAt || chat.created_at || new Date()).toLocaleDateString()}
                                 </div>
                             </div>
 
@@ -502,6 +692,5 @@ export const ProjectHub: React.FC<ProjectHubProps> = ({
             </div>
         </div>
       </div>
-    </div>
   );
 };

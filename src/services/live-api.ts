@@ -1,6 +1,7 @@
 
 import { GOOGLE_API_KEY, LIVE_API_URL, MODELS } from "../config";
 import { getApiKeyWithCache } from "./api-keys";
+import { WEB_AGENT_TOOLS, WEB_AGENT_SYSTEM_PROMPT } from "../prompts/computer-use";
 
 export interface LiveCallbacks {
   onTextResponse: (text: string) => void;
@@ -8,6 +9,14 @@ export interface LiveCallbacks {
   onError: (error: Error) => void;
   onClose: () => void;
   onReady: () => void;
+  onFunctionCall?: (functionCall: { name: string; args: any }) => Promise<string>; // Execute function and return result
+}
+
+export interface PageContext {
+  accessibilityTree: string;
+  screenshot: string; // base64 image
+  url: string;
+  title: string;
 }
 
 export class LiveClient {
@@ -24,9 +33,12 @@ export class LiveClient {
   private maxSessionDuration: number = 14 * 60 * 1000;  // 14 minutes (before 15-min limit)
   private sessionCheckInterval: ReturnType<typeof setInterval> | null = null;
   private playedBuffersCount: number = 0;  // Track buffers to reset periodically
+  private enableComputerUse: boolean = false;  // Enable Computer Use tools
+  private pageContext: PageContext | null = null;  // Current page context
 
-  constructor(callbacks: LiveCallbacks) {
+  constructor(callbacks: LiveCallbacks, enableComputerUse: boolean = false) {
     this.callbacks = callbacks;
+    this.enableComputerUse = enableComputerUse;
   }
 
   // Reset audio context to prevent degradation
@@ -149,6 +161,28 @@ export class LiveClient {
           // Start session timeout check (reconnect before 15-min limit)
           this.startSessionCheck();
 
+          // Build system instruction based on mode
+          let systemInstructionText = "Eres Lia, una asistente de productividad amigable y eficiente. Responde siempre en español de forma concisa y útil.";
+
+          if (this.enableComputerUse) {
+            // Use Computer Use system prompt when enabled
+            systemInstructionText = WEB_AGENT_SYSTEM_PROMPT;
+          } else {
+            // Normal mode - add search instruction
+            systemInstructionText += " Cuando el usuario pregunte sobre información actual, noticias, clima, eventos recientes o cualquier dato que requiera información actualizada, usa la herramienta de búsqueda de Google para obtener información precisa y actual.";
+          }
+
+          // Build tools array
+          const tools: any[] = [];
+
+          if (this.enableComputerUse) {
+            // Add Computer Use tools (click, type, scroll, etc.)
+            tools.push(...WEB_AGENT_TOOLS);
+          }
+
+          // Always add Google Search
+          tools.push({ googleSearch: {} });
+
           // Setup message format according to BidiGenerateContent API
           const setupMessage = {
             setup: {
@@ -171,12 +205,10 @@ export class LiveClient {
               },
               systemInstruction: {
                 parts: [{
-                  text: "Eres Lia, una asistente de productividad amigable y eficiente. Responde siempre en español de forma concisa y útil. Cuando el usuario pregunte sobre información actual, noticias, clima, eventos recientes o cualquier dato que requiera información actualizada, usa la herramienta de búsqueda de Google para obtener información precisa y actual."
+                  text: systemInstructionText
                 }]
               },
-              tools: [
-                { googleSearch: {} }
-              ]
+              tools: tools
             }
           };
 
@@ -299,7 +331,7 @@ export class LiveClient {
     });
   }
 
-  private processServerContent(content: any) {
+  private async processServerContent(content: any) {
     if (!content.modelTurn?.parts) return;
 
     for (const part of content.modelTurn.parts) {
@@ -315,11 +347,59 @@ export class LiveClient {
         this.callbacks.onAudioResponse(part.inlineData.data);
         this.playAudio(part.inlineData.data);
       }
+
+      // Function call - execute and send result back
+      if (part.functionCall) {
+        console.log("Live API: Function call:", part.functionCall);
+        await this.handleFunctionCall(part.functionCall);
+      }
     }
 
     // Check if turn is complete
     if (content.turnComplete) {
       console.log("Live API: Turn complete");
+    }
+  }
+
+  private async handleFunctionCall(functionCall: { name: string; args: any }) {
+    if (!this.callbacks.onFunctionCall) {
+      console.warn("Live API: Function call received but no handler provided");
+      return;
+    }
+
+    try {
+      console.log(`Live API: Executing function ${functionCall.name} with args:`, functionCall.args);
+
+      // Execute the function via callback
+      const result = await this.callbacks.onFunctionCall(functionCall);
+
+      // Send function response back to the model
+      this.send({
+        toolResponse: {
+          functionResponses: [{
+            name: functionCall.name,
+            response: {
+              result: result
+            }
+          }]
+        }
+      });
+
+      console.log(`Live API: Function ${functionCall.name} executed successfully`);
+    } catch (error: any) {
+      console.error(`Live API: Function ${functionCall.name} failed:`, error);
+
+      // Send error response back to the model
+      this.send({
+        toolResponse: {
+          functionResponses: [{
+            name: functionCall.name,
+            response: {
+              error: error.message || "Function execution failed"
+            }
+          }]
+        }
+      });
     }
   }
 
@@ -488,6 +568,51 @@ export class LiveClient {
         turnComplete: true
       }
     });
+  }
+
+  // Update page context (accessibility tree + screenshot)
+  updatePageContext(context: PageContext) {
+    this.pageContext = context;
+    console.log("Live API: Page context updated", { url: context.url, title: context.title });
+  }
+
+  // Send page context to the model
+  sendPageContext() {
+    if (!this.isReady()) return;
+    if (!this.pageContext) {
+      console.warn("Live API: No page context available");
+      return;
+    }
+
+    const contextMessage = `=== ESTADO ACTUAL DE LA PÁGINA ===
+URL: ${this.pageContext.url}
+Título: ${this.pageContext.title}
+
+ACCESSIBILITY TREE (elementos interactivos):
+${this.pageContext.accessibilityTree}
+
+=== FIN DEL ESTADO ===`;
+
+    // Send context with screenshot
+    this.send({
+      clientContent: {
+        turns: [{
+          role: "user",
+          parts: [
+            { text: contextMessage },
+            {
+              inlineData: {
+                mimeType: "image/jpeg",
+                data: this.pageContext.screenshot
+              }
+            }
+          ]
+        }],
+        turnComplete: true
+      }
+    });
+
+    console.log("Live API: Page context sent to model");
   }
 
   // Signal end of audio input turn (when user manually stops mic)

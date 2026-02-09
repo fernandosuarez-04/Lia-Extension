@@ -465,6 +465,130 @@ function getPageContent(): string {
 }
 
 // ============================================
+// FIND AND HIGHLIGHT (Smart References)
+// ============================================
+
+function findAndHighlightText(searchText: string): { found: boolean; matchCount: number } {
+  if (!searchText || searchText.trim().length === 0) {
+    return { found: false, matchCount: 0 };
+  }
+
+  // Remove any previous highlights
+  document.querySelectorAll('.__lia-highlight').forEach(el => {
+    const parent = el.parentNode;
+    if (parent) {
+      parent.replaceChild(document.createTextNode(el.textContent || ''), el);
+      parent.normalize();
+    }
+  });
+
+  // For long snippets, use first 80 chars to increase match chance
+  const query = searchText.trim();
+  const searchFor = query.length > 100 ? query.substring(0, 80) : query;
+
+  // Use TreeWalker to find text nodes containing the search text
+  const walker = document.createTreeWalker(
+    document.body,
+    NodeFilter.SHOW_TEXT,
+    {
+      acceptNode(node) {
+        // Skip script, style, noscript, hidden elements
+        const parent = node.parentElement;
+        if (!parent) return NodeFilter.FILTER_REJECT;
+        const tag = parent.tagName;
+        if (tag === 'SCRIPT' || tag === 'STYLE' || tag === 'NOSCRIPT') return NodeFilter.FILTER_REJECT;
+        const style = getComputedStyle(parent);
+        if (style.display === 'none' || style.visibility === 'hidden') return NodeFilter.FILTER_REJECT;
+        return NodeFilter.FILTER_ACCEPT;
+      }
+    }
+  );
+
+  // Collect all text nodes
+  const textNodes: Text[] = [];
+  let node: Node | null;
+  while ((node = walker.nextNode())) {
+    textNodes.push(node as Text);
+  }
+
+  // Try exact match first, then case-insensitive
+  let matchCount = 0;
+  const searchLower = searchFor.toLowerCase();
+
+  for (const textNode of textNodes) {
+    const content = textNode.textContent || '';
+    const idx = content.toLowerCase().indexOf(searchLower);
+    if (idx === -1) continue;
+
+    // Found a match — create a highlighted range
+    const range = document.createRange();
+    range.setStart(textNode, idx);
+    range.setEnd(textNode, Math.min(idx + searchFor.length, content.length));
+
+    const mark = document.createElement('mark');
+    mark.className = '__lia-highlight';
+    mark.style.cssText = 'background: #FFEB3B; color: #000; padding: 2px 0; border-radius: 2px; transition: background 0.5s;';
+
+    try {
+      range.surroundContents(mark);
+      matchCount++;
+
+      // Scroll to first match
+      if (matchCount === 1) {
+        mark.scrollIntoView({ behavior: 'smooth', block: 'center' });
+      }
+
+      // Fade out after 5 seconds
+      setTimeout(() => {
+        mark.style.background = 'rgba(255, 235, 59, 0.3)';
+        // Remove completely after 10 seconds
+        setTimeout(() => {
+          const parent = mark.parentNode;
+          if (parent) {
+            parent.replaceChild(document.createTextNode(mark.textContent || ''), mark);
+            parent.normalize();
+          }
+        }, 5000);
+      }, 5000);
+
+      // Only highlight first 3 matches to avoid overwhelming the page
+      if (matchCount >= 3) break;
+    } catch {
+      // surroundContents can fail if range spans multiple elements
+      continue;
+    }
+  }
+
+  // If no exact match found, try matching across adjacent text nodes
+  if (matchCount === 0 && searchFor.length > 20) {
+    // Try shorter prefix (first 40 chars)
+    const shortSearch = searchFor.substring(0, 40).toLowerCase();
+    for (const textNode of textNodes) {
+      const content = (textNode.textContent || '').toLowerCase();
+      const idx = content.indexOf(shortSearch);
+      if (idx === -1) continue;
+
+      const el = textNode.parentElement;
+      if (el) {
+        el.scrollIntoView({ behavior: 'smooth', block: 'center' });
+        // Highlight the parent element temporarily
+        const origBg = el.style.background;
+        el.style.background = '#FFEB3B';
+        el.style.transition = 'background 0.5s';
+        matchCount = 1;
+        setTimeout(() => {
+          el.style.background = 'rgba(255, 235, 59, 0.3)';
+          setTimeout(() => { el.style.background = origBg; }, 5000);
+        }, 5000);
+        break;
+      }
+    }
+  }
+
+  return { found: matchCount > 0, matchCount };
+}
+
+// ============================================
 // Text Selection Popup
 // ============================================
 
@@ -658,6 +782,13 @@ chrome.runtime.onMessage.addListener((request: any, _sender: any, sendResponse: 
     case 'getSelectedText':
       sendResponse({ text: currentSelection });
       break;
+
+    case 'FIND_AND_HIGHLIGHT': {
+      const { searchText } = request;
+      const result = findAndHighlightText(searchText || '');
+      sendResponse(result);
+      break;
+    }
 
     case 'getGeolocation':
       navigator.geolocation.getCurrentPosition(

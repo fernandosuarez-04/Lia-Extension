@@ -311,6 +311,63 @@ chrome.runtime.onMessage.addListener((message: any, sender: any, sendResponse: a
     return true;
   }
 
+  // ============================================
+  // NAVIGATE AND HIGHLIGHT (Smart References)
+  // ============================================
+  if (message.type === 'NAVIGATE_AND_HIGHLIGHT') {
+    const { url, searchText } = message;
+
+    chrome.tabs.create({ url }, (tab) => {
+      if (!tab?.id) {
+        sendResponse({ success: false, error: 'Could not create tab' });
+        return;
+      }
+
+      const tabId = tab.id;
+
+      // Wait for page to fully load, then send highlight command
+      const onUpdated = (updatedTabId: number, changeInfo: any) => {
+        if (updatedTabId === tabId && changeInfo.status === 'complete') {
+          chrome.tabs.onUpdated.removeListener(onUpdated);
+
+          // Small delay for render, then inject content script and highlight
+          setTimeout(async () => {
+            try {
+              // Ensure content script is injected
+              await injectContentScript(tabId);
+
+              // Another small delay for content script to initialize
+              setTimeout(() => {
+                chrome.tabs.sendMessage(tabId, {
+                  action: 'FIND_AND_HIGHLIGHT',
+                  searchText
+                }, (response) => {
+                  if (chrome.runtime.lastError) {
+                    console.log('Highlight failed:', chrome.runtime.lastError.message);
+                  } else {
+                    console.log('Highlight result:', response);
+                  }
+                });
+              }, 500);
+            } catch (err) {
+              console.log('Could not inject content script for highlight:', err);
+            }
+          }, 800);
+        }
+      };
+
+      chrome.tabs.onUpdated.addListener(onUpdated);
+
+      // Safety timeout: remove listener after 15s
+      setTimeout(() => {
+        chrome.tabs.onUpdated.removeListener(onUpdated);
+      }, 15000);
+    });
+
+    sendResponse({ success: true });
+    return true;
+  }
+
   // When popup requests transcription start, find the Meet tab and tell it to start
   if (message.type === 'START_MEET_TRANSCRIPTION') {
     console.log('Background: Popup requesting transcription start');
