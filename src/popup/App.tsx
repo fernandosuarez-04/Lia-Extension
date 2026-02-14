@@ -342,7 +342,7 @@ function App() {
           .insert({
             name: suggestionData.targetName.trim().substring(0, 50),
             user_id: user.id,
-            description: `Proyecto automático para agrupar conversaciones sobre ${suggestionData.targetName.substring(0, 30)}.`
+            description: `Carpeta automática para agrupar conversaciones sobre ${suggestionData.targetName.substring(0, 30)}.`
           })
           .select()
           .single();
@@ -4158,7 +4158,7 @@ function App() {
             justifyContent: 'space-between',
             marginBottom: '8px'
           }}>
-            <span style={{ fontSize: '12px', fontWeight: 600, color: 'var(--color-gray-medium)', textTransform: 'uppercase' }}>Proyectos</span>
+            <span style={{ fontSize: '12px', fontWeight: 600, color: 'var(--color-gray-medium)', textTransform: 'uppercase' }}>Carpetas</span>
             <button
               onClick={() => setIsFolderModalOpen(true)}
               style={{
@@ -4170,7 +4170,7 @@ function App() {
                 display: 'flex',
                 alignItems: 'center'
               }}
-              title="Crear proyecto"
+              title="Crear carpeta"
             >
               <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
                 <line x1="12" y1="5" x2="12" y2="19"></line>
@@ -4336,7 +4336,7 @@ function App() {
                     }}
                     onMouseOver={(e) => { e.currentTarget.style.opacity = '1'; e.currentTarget.style.color = 'var(--color-accent)'; }}
                     onMouseOut={(e) => { e.currentTarget.style.opacity = '0.6'; e.currentTarget.style.color = 'var(--color-gray-medium)'; }}
-                    title="Mover a proyecto"
+                    title="Mover a carpeta"
                 >
                     <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
                     <path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z"></path>
@@ -4467,12 +4467,12 @@ function App() {
             padding: '24px',
             boxShadow: 'var(--shadow-modal)'
           }}>
-            <h3 style={{ color: 'var(--color-white)', fontSize: '16px', fontWeight: 600, margin: '0 0 16px 0' }}>Crear Proyecto</h3>
+            <h3 style={{ color: 'var(--color-white)', fontSize: '16px', fontWeight: 600, margin: '0 0 16px 0' }}>Crear Carpeta</h3>
             <input
               type="text"
               value={newFolderName}
               onChange={(e) => setNewFolderName(e.target.value)}
-              placeholder="Nombre del proyecto..."
+              placeholder="Nombre de la carpeta..."
               style={{
                 width: '100%',
                 padding: '12px 14px',
@@ -4588,7 +4588,7 @@ function App() {
             padding: '20px',
             boxShadow: 'var(--shadow-modal)'
           }} onClick={e => e.stopPropagation()}>
-            <h3 style={{ color: 'var(--color-white)', fontSize: '16px', margin: '0 0 16px 0' }}>Mover a Proyecto</h3>
+            <h3 style={{ color: 'var(--color-white)', fontSize: '16px', margin: '0 0 16px 0' }}>Mover a Carpeta</h3>
             <div style={{ maxHeight: '300px', overflowY: 'auto' }}>
                 <button
                     onClick={() => moveChatToFolder(movingChatId, null)} // Null for removing from folder
@@ -4610,7 +4610,7 @@ function App() {
                     onMouseOut={(e) => e.currentTarget.style.background = 'transparent'}
                 >
                     <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><path d="M3 9l9-7 9 7v11a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"></path><polyline points="9 22 9 12 15 12 15 22"></polyline></svg>
-                    Sin Proyecto (General)
+                    Sin Carpeta (General)
                 </button>
                 {Array.from(folders.values()).map(folder => (
                     <button

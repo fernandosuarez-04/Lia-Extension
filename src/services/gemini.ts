@@ -744,9 +744,26 @@ export async function sendMessageStream(
         systemInstruction: systemInstruction
       });
 
+      // Build fallback generation config - convert thinkingConfig for Gemini 2.5 compatibility
+      const fallbackGenerationConfig: any = { maxOutputTokens: generationConfig.maxOutputTokens };
+      if (thinkingConfig && thinkingConfig.mode !== 'off') {
+        const isGemini25 = fallbackId.includes('2.5') || fallbackId.includes('2.0');
+        if (isGemini25) {
+          // Gemini 2.5 uses thinkingBudget (number), NOT thinkingLevel (string)
+          const budget = THINKING_BUDGETS[thinkingConfig.mode] ?? 0;
+          if (budget > 0) {
+            fallbackGenerationConfig.thinkingConfig = { thinkingBudget: budget };
+            console.log('Fallback thinking: budget =', budget);
+          }
+        } else {
+          // Gemini 3+ models: keep thinkingLevel as-is
+          fallbackGenerationConfig.thinkingConfig = generationConfig.thinkingConfig;
+        }
+      }
+
       const fallbackChat = fallbackInstance.startChat({
         history,
-        generationConfig // Apply same generation config (maxOutputTokens, thinking, etc)
+        generationConfig: fallbackGenerationConfig
       });
       chatSession = fallbackChat; // Update global session
 
